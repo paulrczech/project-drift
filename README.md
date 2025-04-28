@@ -6,8 +6,8 @@ View Live Site: https://project-drift.netlify.app/
 
 ## Project Setup (Run Locally)
 
-git clone https://github.com/paulrczech/project-drift.git
-cd project-drift
-npm install
-npm run dev
+git clone https://github.com/paulrczech/project-drift.git  
+cd project-drift  
+npm install  
+npm run dev  
 npm run build
