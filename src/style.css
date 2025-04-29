@@ -66,6 +66,70 @@ button:focus-visible {
   background-color: rgba(0, 0, 0, 0.8) !important;
 }
 
+.emotion-happy {
+  background-color: #c4a600 !important;
+} /* Soft muted gold */
+.emotion-joyful {
+  background-color: #e2882d !important;
+} /* Deeper soft orange */
+.emotion-grateful {
+  background-color: #a97b88 !important;
+} /* Dusty rose */
+.emotion-playful {
+  background-color: #d94c4c !important;
+} /* Warmer soft red */
+.emotion-cheerful {
+  background-color: #5ca9d3 !important;
+} /* Softened sky blue */
+.emotion-content {
+  background-color: #7ca991 !important;
+} /* Deeper seafoam */
+.emotion-hopeful {
+  background-color: #5fbf97 !important;
+} /* Mid-tone mint green */
+.emotion-peaceful {
+  background-color: #7d91ab !important;
+} /* Dusty blue */
+.emotion-serene {
+  background-color: #6ba8d6 !important;
+} /* Muted soft blue */
+.emotion-relaxed {
+  background-color: #6c8f36 !important;
+} /* Dusty moss green */
+.emotion-neutral {
+  background-color: #999999 !important;
+} /* Muted gray */
+.emotion-reflective {
+  background-color: #766c8f !important;
+} /* Smoky violet */
+.emotion-nostalgic {
+  background-color: #99886d !important;
+} /* Dusty sand tone */
+.emotion-bittersweet {
+  background-color: #464858 !important;
+} /* Muted steel blue */
+.emotion-wistful {
+  background-color: #9a89b3 !important;
+} /* Soft muted lavender */
+.emotion-longing {
+  background-color: #355d94 !important;
+} /* Dusty deep blue */
+.emotion-uneasy {
+  background-color: #556070 !important;
+} /* Stormy gray-blue */
+.emotion-anxious {
+  background-color: #41555e !important;
+} /* Deep smoky teal */
+.emotion-melancholy {
+  background-color: #3e4a6b !important;
+} /* Midnight steel blue */
+.emotion-depressed {
+  background-color: #1a1a30 !important;
+} /* Deeper navy black */
+.emotion-sad {
+  background-color: #5c6d82 !important;
+} /* Dusty blue-gray */
+
 .multiselect__option--highlight {
   background: rgba(0, 0, 0, 0.8) !important;
 }

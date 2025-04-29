@@ -9,6 +9,8 @@
 
   const props = defineProps<Props>()
 
+  const defaultColors = ['#5C6D7A', '#E8D7F1']
+
   const currentBackground = ref('')
   const previousBackground = ref('')
   const fadingOut = ref(false)
@@ -18,7 +20,7 @@
   })
 
   const breathingDuration = computed(() => {
-    return effectiveEmotion.value === 'default' ? '12s' : '12s'
+    return effectiveEmotion.value === 'default' ? '8s' : '8s'
   })
 
   function getGradient(
@@ -52,7 +54,7 @@
       const isDefault = !newEmotion || newEmotion === 'default'
 
       const colors = isDefault
-        ? ['#2a2a2a', '#1a1a1a']
+        ? defaultColors
         : emotionPalettes[newEmotion.toLowerCase()] ?? ['#ccc', '#eee']
 
       const newGradient = getGradient(colors, props.gradientType ?? 'random')
@@ -75,7 +77,7 @@
 
   // Set initial background manually at startup
   if (!props.currentEmotion) {
-    const colors = ['#2a2a2a', '#1a1a1a']
+    const colors = defaultColors
     currentBackground.value = getGradient(
       colors,
       props.gradientType ?? 'random'

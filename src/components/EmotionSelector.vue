@@ -11,6 +11,30 @@
   const selectedEmotions = ref<string[]>([])
   const isSelected = ref(false)
 
+  const emotionColors: Record<string, string> = {
+    happy: 'emotion-happy',
+    joyful: 'emotion-joyful',
+    grateful: 'emotion-grateful',
+    playful: 'emotion-playful',
+    cheerful: 'emotion-cheerful',
+    content: 'emotion-content',
+    hopeful: 'emotion-hopeful',
+    peaceful: 'emotion-peaceful',
+    serene: 'emotion-serene',
+    relaxed: 'emotion-relaxed',
+    neutral: 'emotion-neutral',
+    reflective: 'emotion-reflective',
+    nostalgic: 'emotion-nostalgic',
+    bittersweet: 'emotion-bittersweet',
+    wistful: 'emotion-wistful',
+    longing: 'emotion-longing',
+    uneasy: 'emotion-uneasy',
+    anxious: 'emotion-anxious',
+    melancholy: 'emotion-melancholy',
+    depressed: 'emotion-depressed',
+    sad: 'emotion-sad',
+  }
+
   const emotionOptions = emotionProfiles.map((profile) => profile.label)
 
   function reset() {
@@ -50,7 +74,14 @@
       :clear-on-select="false"
       :allow-empty="true"
       :disabled="isSelected"
-      placeholder="Please select 1 or 2 emotions" />
+      placeholder="Please select 1 or 2 emotions">
+      <template #tag="{ option, remove }">
+        <span class="multiselect__tag" :class="emotionColors[option]">
+          <span>{{ option }}</span>
+          <i class="multiselect__tag-icon" @click="remove(option)"> </i>
+        </span>
+      </template>
+    </Multiselect>
 
     <button
       v-if="!isSelected"
@@ -81,7 +112,7 @@
 
   .submit-button {
     padding: 0.5rem 1rem;
-    background-color: rgba(0, 0, 0, 0.8);
+    background-color: #5c6d7a;
     color: white;
     font-size: 0.875rem;
     border: none;
@@ -101,7 +132,7 @@
 
   .end-button {
     padding: 0.5rem 1rem;
-    background-color: rgba(0, 0, 0, 0.8);
+    background-color: rgba(0, 0, 0, 0.5);
     color: white;
     font-size: 0.875rem;
     border: none;
@@ -111,6 +142,6 @@
   }
 
   .end-button:hover {
-    background-color: rgba(0, 0, 0, 1);
+    background-color: rgba(0, 0, 0, 0.6);
   }
 </style>
