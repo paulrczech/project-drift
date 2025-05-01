@@ -78,21 +78,20 @@
       :snippetA="snippetA"
       :snippetB="snippetB"
       :crossfadeInterval="crossfadeInterval" />
-    <div class="emotion-bar__wrapper">
-      <div class="emotion-bar">
-        <EmotionSelector
-          ref="emotionSelectorRef"
-          @submit:selected="handleSubmit"
-          @end:drift="stopDrift" />
 
-        <AudioPlayer
-          v-if="hasSelected"
-          ref="audioPlayerRef"
-          :samplesA="samplesA"
-          :samplesB="samplesB"
-          :crossfadeInterval="crossfadeInterval"
-          :playerOffset="2" />
-      </div>
+    <div class="emotion-bar">
+      <EmotionSelector
+        ref="emotionSelectorRef"
+        @submit:selected="handleSubmit"
+        @end:drift="stopDrift" />
+
+      <AudioPlayer
+        v-if="hasSelected"
+        ref="audioPlayerRef"
+        :samplesA="samplesA"
+        :samplesB="samplesB"
+        :crossfadeInterval="crossfadeInterval"
+        :playerOffset="2" />
     </div>
   </div>
 </template>
@@ -118,5 +117,6 @@
     justify-content: center;
     gap: 1rem;
     width: auto;
+    padding: 1rem;
   }
 </style>

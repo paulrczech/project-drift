@@ -104,21 +104,16 @@
     gap: 1rem;
   }
 
-  .multiselect {
-    width: auto;
-    min-width: 300px;
-    font-size: 1rem;
-  }
-
   .submit-button {
     padding: 0.5rem 1rem;
     background-color: #5c6d7a;
     color: white;
     font-size: 0.875rem;
     border: none;
-    border-radius: 0.5rem;
+    border-radius: 1.5rem;
     cursor: pointer;
     transition: background-color 0.3s ease;
+    white-space: nowrap;
   }
 
   .submit-button:disabled {
@@ -136,9 +131,10 @@
     color: white;
     font-size: 0.875rem;
     border: none;
-    border-radius: 0.5rem;
+    border-radius: 1.5rem;
     cursor: pointer;
     transition: background-color 0.3s ease;
+    white-space: nowrap;
   }
 
   .end-button:hover {

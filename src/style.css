@@ -62,8 +62,58 @@ button:focus-visible {
   text-align: center;
 }
 
+.multiselect {
+  width: auto;
+  min-width: 235px;
+  font-size: 1rem;
+  border-radius: 1.5rem;
+}
+
+.multiselect__select {
+  border-radius: 1.5rem;
+}
+
+.multiselect__content-wrapper {
+  border-radius: 0 0 1.5rem 1.5rem;
+  background: rgba(255, 255, 255, 0.5);
+  border: none;
+}
+
+.multiselect__option--highlight {
+  background: #5c6d7a !important;
+}
+
+.multiselect__option--highlight:after {
+  display: none;
+}
+
 .multiselect__tag {
-  background-color: rgba(0, 0, 0, 0.8) !important;
+  border-radius: 1.5rem;
+  padding-bottom: 6px;
+  font-size: 0.8rem;
+}
+
+.multiselect__tag-icon::after {
+  color: #fff;
+}
+
+.multiselect__tags {
+  background: rgba(255, 255, 255, 0.5);
+  border: none;
+  border-radius: 1.5rem;
+}
+
+.multiselect__input {
+  position: absolute !important;
+  margin: 0 !important;
+  top: 0;
+  left: 0;
+  padding: 0 !important;
+  z-index: 0;
+  overflow: hidden !important;
+  max-height: 0 !important;
+  min-height: 0 !important;
+  height: 0 !important;
 }
 
 .emotion-happy {
@@ -130,46 +180,9 @@ button:focus-visible {
   background-color: #5c6d82 !important;
 } /* Dusty blue-gray */
 
-.multiselect__option--highlight {
-  background: rgba(0, 0, 0, 0.8) !important;
-}
-
-.multiselect__option--highlight:after {
-  display: none;
-}
-
-.multiselect__tag-icon::after {
-  color: #fff;
-}
-
-.fixed-top .multiselect__tags {
-  background: rgba(255, 255, 255, 0.3);
-  border: none;
-}
-
-.fixed-top .multiselect__content-wrapper {
-  background: rgba(255, 255, 255, 0.3);
-  border: none;
-}
-
-.fixed-top .multiselect__option--selected {
-  background: rgba(255, 255, 255, 0.5);
-}
-
-.fixed-top .multiselect__option--selected:after {
-  display: none;
-}
-.multiselect__input {
-  position: absolute !important;
-  margin: 0 !important;
-  top: 0;
-  left: 0;
-  padding: 0 !important;
-  z-index: 0;
-  overflow: hidden !important;
-  max-height: 0 !important;
-  min-height: 0 !important;
-  height: 0 !important;
+.multiselect__placeholder {
+  color: rgba(0, 0, 0, 0.4);
+  font-size: 0.8rem;
 }
 
 @media (prefers-color-scheme: light) {
