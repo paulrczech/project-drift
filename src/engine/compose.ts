@@ -10,7 +10,7 @@
 // (settle in the final mode until stopped); a finite plan can also be composed in one go
 // with `composeTimeline`.
 
-import { DriftEngine, type Move, type Rung } from './drift'
+import { DriftEngine, beatFor, type Move, type Rung } from './drift'
 
 export interface NoteEvent {
   time: number // seconds from the start
@@ -31,13 +31,14 @@ export interface Mark {
 export interface Waypoint {
   rung: Rung
   hold: number
+  arousal?: number // 0 still … 1 energised (default 0.4)
 }
 
 export interface TimelinePlan {
   waypoints: Waypoint[]
   walk: number | number[] // seconds per walk (one value, or one per gap between waypoints)
   tonic?: number // pitch class, 0-11 (default D)
-  beat?: number // average seconds between harmonic moves when settled
+  beat?: number // fixed seconds between harmonic moves; by default arousal sets it
   rng?: () => number
 }
 
@@ -72,8 +73,11 @@ export interface Walk {
 
 export interface Layout {
   walks: Walk[]
+  arousals: number[] // per waypoint
   duration: number // Infinity if the last hold is Infinity
 }
+
+export const DEFAULT_AROUSAL = 0.4
 
 export function layoutTimeline(waypoints: Waypoint[], walk: number | number[]): Layout {
   const walks: Walk[] = []
@@ -92,7 +96,20 @@ export function layoutTimeline(waypoints: Waypoint[], walk: number | number[]): 
     })
     at += seconds
   })
-  return { walks, duration: at }
+  return { walks, arousals: waypoints.map((w) => w.arousal ?? DEFAULT_AROUSAL), duration: at }
+}
+
+// Arousal at time t: constant while settled, a straight line along each walk.
+export function arousalAt(layout: Layout, t: number): number {
+  for (let i = 0; i < layout.walks.length; i++) {
+    const w = layout.walks[i]
+    if (t < w.start) return layout.arousals[i]
+    if (t < w.end) {
+      const p = (t - w.start) / (w.end - w.start)
+      return layout.arousals[i] + (layout.arousals[i + 1] - layout.arousals[i]) * p
+    }
+  }
+  return layout.arousals[layout.arousals.length - 1]
 }
 
 // Where we are along the waypoints at time t, as a fractional index: 0 = at the first,
@@ -135,7 +152,7 @@ export class Composer {
   readonly marks: Mark[] = []
   private engine: DriftEngine
   private rng: () => number
-  private beat: number
+  private beat: number | undefined
   private linkSeed: number
   private open = new Map<number, Entry>()
   private closed: Entry[] = []
@@ -147,13 +164,18 @@ export class Composer {
 
   constructor(plan: TimelinePlan) {
     this.rng = plan.rng ?? Math.random
-    this.beat = plan.beat ?? 6
+    this.beat = plan.beat
     this.layout = layoutTimeline(plan.waypoints, plan.walk)
     this.flips = this.layout.walks.flatMap((w) => w.flips.map((time) => ({ time, dir: w.dir })))
-    this.engine = new DriftEngine({ rung: plan.waypoints[0].rung, tonic: plan.tonic, rng: this.rng })
+    this.engine = new DriftEngine({
+      rung: plan.waypoints[0].rung,
+      tonic: plan.tonic,
+      arousal: this.layout.arousals[0],
+      rng: this.rng,
+    })
     this.linkSeed = Math.floor(this.rng() * 2 ** 31)
     this.engine.cluster.forEach((note, i) => this.begin(note, i * OPENING_STAGGER))
-    this.t = this.beat * (0.6 + 0.4 * this.rng()) + this.engine.cluster.length * OPENING_STAGGER
+    this.t = this.beatBase(0) * (0.6 + 0.4 * this.rng()) + this.engine.cluster.length * OPENING_STAGGER
   }
 
   get tonic(): number {
@@ -169,7 +191,17 @@ export class Composer {
     } else if (!this.finished) {
       this.advance(until + LOOKAHEAD)
     }
-    const clock = this.finished ? Infinity : this.t
+    // Everything before the clock has been decided. A ladder flip that is due but not yet
+    // applied can still close a voice, so the clock never runs past one.
+    // It also stops at the plan's end, where every voice is cut: the stream can overshoot
+    // its target by a beat, and that must not make a link look safe.
+    const clock = this.finished
+      ? Infinity
+      : Math.min(
+          this.t,
+          duration,
+          this.nextFlip < this.flips.length ? this.flips[this.nextFlip].time : Infinity
+        )
     const out: NoteEvent[] = []
     for (const e of this.open.values()) this.emit(e, clock, until, out)
     for (const e of this.closed) this.emit(e, clock, until, out)
@@ -191,16 +223,22 @@ export class Composer {
   }
 
   private apply(m: Move, t: number) {
-    this.finishNote(m.from, t)
-    this.begin(m.to, t)
+    if (m.from !== null) this.finishNote(m.from, t)
+    if (m.to !== null) this.begin(m.to, t)
+  }
+
+  // Seconds between harmonic moves at time t, before any walk speed-up.
+  private beatBase(t: number): number {
+    return this.beat ?? beatFor(arousalAt(this.layout, t))
   }
 
   // While walking, harmonic moves speed up so each flip can be followed by a voice
   // (never faster than the pad can articulate).
   private beatAt(t: number): number {
     const w = this.layout.walks.find((x) => t >= x.start && t < x.end)
-    if (!w || !w.flips.length) return this.beat
-    return Math.max(MIN_BEAT, Math.min(this.beat, (w.end - w.start) / (w.flips.length * 1.2)))
+    const base = this.beatBase(t)
+    if (!w || !w.flips.length) return base
+    return Math.max(MIN_BEAT, Math.min(base, (w.end - w.start) / (w.flips.length * 1.2)))
   }
 
   private flip(f: { time: number; dir: 1 | -1 }) {
@@ -213,9 +251,12 @@ export class Composer {
   }
 
   private advance(target: number) {
-    while (this.t < target) {
+    // no harmonic moves in the last 4 seconds of a finite plan, however it is chunked
+    const limit = Math.min(target, this.layout.duration - 4)
+    while (this.t < limit) {
       while (this.nextFlip < this.flips.length && this.flips[this.nextFlip].time <= this.t)
         this.flip(this.flips[this.nextFlip++])
+      this.engine.setArousal(arousalAt(this.layout, this.t))
       const m = this.engine.step()
       if (m) this.apply(m, this.t)
       this.t += this.beatAt(this.t) * (0.75 + 0.5 * this.rng())

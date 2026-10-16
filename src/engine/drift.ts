@@ -43,9 +43,11 @@ const GENTLE = [
 // not just implied.
 const COLOR_INTERVAL = [6, 11, 10, 9, 8, 1, 6]
 
+// One change to what is sounding. A voice moving has both; a voice entering has no
+// `from`; a voice leaving has no `to`.
 export interface Move {
-  from: number
-  to: number
+  from: number | null
+  to: number | null
 }
 
 export interface DriftOptions {
@@ -53,7 +55,7 @@ export interface DriftOptions {
   tonic?: number // pitch class of the tonal centre, 0-11 (default D)
   low?: number // lowest MIDI note any voice may reach (default: just under the tonic)
   high?: number // highest
-  voices?: number
+  arousal?: number // 0 still … 1 energised (default 0.4); see setArousal
   rng?: () => number
 }
 
@@ -72,23 +74,36 @@ function pcsOf(rung: Rung, tonic: number): Set<number> {
   return new Set(SCALE_MAP[LADDER[rung]].intervals.map((i) => (tonic + i) % 12))
 }
 
-// An open voicing built from the mode's own degrees: root, fifth, ninth, third.
-export function seedCluster(rung: Rung, tonic = DEFAULT_TONIC): Cluster {
+// An open voicing built from the mode's own degrees: root, fifth, (ninth,) third.
+export function seedCluster(rung: Rung, tonic = DEFAULT_TONIC, voices = 4): Cluster {
   const iv = SCALE_MAP[LADDER[rung]].intervals
   const degree = (n: number) => iv[n - 1] // 1-indexed scale degree in semitones
   const root = rootNear(tonic)
-  return sortCluster([root, root + degree(5), root + 12 + degree(2), root + 12 + degree(3)])
+  const notes = [root, root + degree(5), root + 12 + degree(3)]
+  if (voices >= 4) notes.push(root + 12 + degree(2))
+  return sortCluster(notes)
 }
+
+// Arousal shapes the music in a few steady ways (all read live, so a walk between two
+// moods can calm or quicken as it goes):
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t
+const clamp01 = (x: number) => Math.min(1, Math.max(0, x))
+// Seconds between harmonic moves: slow when still, brisk when energised.
+export const beatFor = (arousal: number) => lerp(9, 3.5, clamp01(arousal))
+// Two enter above, one leave below: a little hysteresis so it does not flutter.
+const voicesFor = (arousal: number, current: number) =>
+  arousal >= 0.33 ? 4 : arousal < 0.27 ? 3 : current
 
 // Voicings stay open at the bottom and may close up higher, as in Eddy's seed rules.
-function minGap(lowerNote: number): number {
+// Calm music opens them further above G3: seconds are left to energetic moods.
+function minGap(lowerNote: number, calm: boolean): number {
   if (lowerNote < 55) return 5 // below G3: a fourth or wider
-  if (lowerNote < 60) return 3 // below C4: a minor third or wider
-  return 2
+  if (lowerNote < 60) return calm ? 4 : 3 // below C4: a (minor) third or wider
+  return calm ? 3 : 2
 }
 
-function wellSpaced(c: Cluster): boolean {
-  for (let i = 0; i < c.length - 1; i++) if (c[i + 1] - c[i] < minGap(c[i])) return false
+function wellSpaced(c: Cluster, calm: boolean): boolean {
+  for (let i = 0; i < c.length - 1; i++) if (c[i + 1] - c[i] < minGap(c[i], calm)) return false
   return true
 }
 
@@ -98,6 +113,7 @@ export class DriftEngine {
   readonly tonic: number
   readonly low: number
   readonly high: number
+  arousal: number
   private rng: () => number
   private recent: string[] = []
   // Pitch classes the last mode change introduced that no voice has sounded yet.
@@ -110,8 +126,29 @@ export class DriftEngine {
     this.low = opts.low ?? rootNear(this.tonic) - 2
     this.high = opts.high ?? this.low + WINDOW_SPAN
     this.rng = opts.rng ?? Math.random
-    this.cluster = seedCluster(opts.rung, this.tonic)
+    this.arousal = clamp01(opts.arousal ?? 0.4)
+    this.cluster = seedCluster(opts.rung, this.tonic, voicesFor(this.arousal, 4))
     this.remember()
+  }
+
+  // 0 still … 1 energised. Moves the register the voices lean toward and how closely they
+  // may sit; the number of voices follows at the next step.
+  setArousal(arousal: number) {
+    this.arousal = clamp01(arousal)
+  }
+
+  private get calm(): boolean {
+    return this.arousal < 0.35
+  }
+
+  // The voices lean toward this mean pitch: deeper when still, brighter when energised.
+  // Relative to the root, so every key plays the same shape of music.
+  private get center(): number {
+    return rootNear(this.tonic) + lerp(6, 20, this.arousal)
+  }
+
+  private get modeThird(): number {
+    return (this.tonic + SCALE_MAP[LADDER[this.rung]].intervals[2]) % 12
   }
 
   get scaleId(): string {
@@ -128,21 +165,90 @@ export class DriftEngine {
   // One voice moves one step inside the current mode. Returns null if nothing
   // sensible is available (the caller can simply wait a beat and try again).
   step(): Move | null {
+    const want = voicesFor(this.arousal, this.cluster.length)
+    if (this.cluster.length < want) return this.addVoice()
+    if (this.cluster.length > want) return this.removeVoice()
     return this.tryStep() ?? (this.forget(), this.tryStep())
   }
 
-  // Prefer clusters that bring in a just-changed degree, keep the mode's colour tone
-  // and keep the tonic — but one time in six, any fresh cluster, so nothing is pinned.
+  // How much a voice matters to the mode's character: the tonic, the colour tone and the
+  // third, when it is the only one sounding them.
+  private importance(note: number, cluster: Cluster): number {
+    const pc = note % 12
+    const color = (this.tonic + COLOR_INTERVAL[this.rung]) % 12
+    const sole = (target: number) =>
+      pc === target && cluster.filter((n) => n % 12 === target).length === 1 ? 1 : 0
+    return 3 * sole(color) + 2 * sole(this.tonic) + sole(this.modeThird)
+  }
+
+  // A voice enters on a note the chord is missing (colour tone, third, tonic), in the
+  // register the music is leaning toward.
+  private addVoice(): Move | null {
+    const allowed = pcsOf(this.rung, this.tonic)
+    const color = (this.tonic + COLOR_INTERVAL[this.rung]) % 12
+    const have = new Set(this.cluster.map((n) => n % 12))
+    let best: { note: number; score: number }[] = []
+    let top = -Infinity
+    for (let note = this.low; note <= this.high; note++) {
+      if (!allowed.has(note % 12) || this.cluster.includes(note)) continue
+      const next = sortCluster([...this.cluster, note])
+      if (!wellSpaced(next, this.calm)) continue
+      const score =
+        2 * (!have.has(color) && note % 12 === color ? 1 : 0) +
+        2 * (!have.has(this.modeThird) && note % 12 === this.modeThird ? 1 : 0) +
+        (!have.has(this.tonic) && note % 12 === this.tonic ? 1 : 0) -
+        Math.abs(note - this.center) / 8
+      if (score > top + 1e-9) {
+        top = score
+        best = [{ note, score }]
+      } else if (Math.abs(score - top) < 1e-9) best.push({ note, score })
+    }
+    if (!best.length) return null
+    const note = best[Math.floor(this.rng() * best.length)].note
+    this.cluster = sortCluster([...this.cluster, note])
+    this.remember()
+    this.cluster.forEach((n) => this.pending.delete(n % 12))
+    return { from: null, to: note }
+  }
+
+  // The least important voice leaves (the bass last, so the root keeps its footing).
+  private removeVoice(): Move | null {
+    if (this.cluster.length <= 3) return null
+    const rank = (n: number) => this.importance(n, this.cluster) + (n === this.cluster[0] ? 0.5 : 0)
+    const lowest = Math.min(...this.cluster.map(rank))
+    const pool = this.cluster.filter((n) => rank(n) === lowest)
+    const note = pool[Math.floor(this.rng() * pool.length)]
+    this.cluster = this.cluster.filter((n) => n !== note)
+    this.remember()
+    return { from: note, to: null }
+  }
+
+  // Prefer clusters that bring in a just-changed degree, keep the mode's colour tone, the
+  // tonic and the third — then, among those, lean toward the register the mood calls for.
+  // One time in six, any fresh cluster, so nothing is pinned.
   private choose(fresh: Cluster[]): Cluster {
     if (this.rng() < 1 / 6) return fresh[Math.floor(this.rng() * fresh.length)]
     const color = (this.tonic + COLOR_INTERVAL[this.rung]) % 12
+    const has = (c: Cluster, pc: number) => (c.some((n) => n % 12 === pc) ? 1 : 0)
     const score = (c: Cluster) =>
       3 * c.filter((n) => this.pending.has(n % 12)).length +
-      2 * (c.some((n) => n % 12 === color) ? 1 : 0) +
-      (c.some((n) => n % 12 === this.tonic) ? 1 : 0)
+      2 * has(c, color) +
+      has(c, this.tonic) +
+      has(c, this.modeThird)
     const best = Math.max(...fresh.map(score))
     const pool = fresh.filter((c) => score(c) === best)
-    return pool[Math.floor(this.rng() * pool.length)]
+    // weighted pick: a step that brings the mean pitch nearer the centre is favoured. One
+    // step shifts the mean by under a semitone, so the weight rewards the *progress* made.
+    const mean = (c: Cluster) => c.reduce((a, n) => a + n, 0) / c.length
+    const now = Math.abs(mean(this.cluster) - this.center)
+    const weight = (c: Cluster) => Math.exp(4 * (now - Math.abs(mean(c) - this.center)))
+    const total = pool.reduce((a, c) => a + weight(c), 0)
+    let r = this.rng() * total
+    for (const c of pool) {
+      r -= weight(c)
+      if (r <= 0) return c
+    }
+    return pool[pool.length - 1]
   }
 
   private forget() {
@@ -162,7 +268,7 @@ export class DriftEngine {
       })
       const fresh = options.filter(
         (c) =>
-          wellSpaced(c) &&
+          wellSpaced(c, this.calm) &&
           c[0] >= this.low &&
           c[c.length - 1] <= this.high &&
           !this.recent.includes(c.join(',')),

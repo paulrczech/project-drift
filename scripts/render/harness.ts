@@ -1,5 +1,5 @@
 import * as Tone from 'tone'
-import { composeJourney, composeTimeline, ATTACK, RELEASE, type JourneyPlan, type TimelinePlan, type NoteEvent } from '../../src/engine/compose'
+import { composeJourney, composeTimeline, layoutTimeline, arousalAt, ATTACK, RELEASE, type JourneyPlan, type TimelinePlan, type NoteEvent } from '../../src/engine/compose'
 
 const URLS: Record<string, string> = { E2: 'E2.mp3', 'G#2': 'Gs2.mp3', C3: 'C3.mp3', E3: 'E3.mp3', 'G#3': 'Gs3.mp3', C4: 'C4.mp3', E4: 'E4.mp3', 'G#4': 'Gs4.mp3', C5: 'C5.mp3', E5: 'E5.mp3', 'G#5': 'Gs5.mp3', C6: 'C6.mp3' }
 
@@ -14,12 +14,14 @@ function wav16(buf: Tone.ToneAudioBuffer, gain: number): string {
   return btoa(bin)
 }
 
-async function render(events: NoteEvent[], seconds: number, wet: number) {
+async function render(events: NoteEvent[], seconds: number, wet: number, wetAt?: (t: number) => number) {
   const buffers = new Tone.ToneAudioBuffers({ urls: URLS, baseUrl: '/public/samples/retro-pad/' })
   await Tone.loaded()
   const buf = await Tone.Offline(async () => {
-    const reverb = new Tone.Reverb({ decay: 8, wet }).toDestination()
+    const reverb = new Tone.Reverb({ decay: 8, wet: wetAt ? wetAt(0) : wet }).toDestination()
     await reverb.ready
+    // same curve as the live player: calmer music sits in a wetter room
+    if (wetAt) for (let t = 1; t <= seconds; t++) reverb.wet.linearRampToValueAtTime(wetAt(t), t)
     const sampler = new Tone.Sampler({ urls: Object.fromEntries(Object.keys(URLS).map(k => [k, buffers.get(k)])), attack: ATTACK, release: RELEASE }).connect(reverb)
     for (const e of events) sampler.triggerAttackRelease(Tone.Frequency(e.note, 'midi').toNote(), e.hold, e.time, 0.8)
   }, seconds + RELEASE + 6, 2)
@@ -31,11 +33,13 @@ async function render(events: NoteEvent[], seconds: number, wet: number) {
 ;(window as any).renderJourney = async (plan: JourneyPlan & { seed?: number }, wet = 0.35) => {
   if (plan.seed != null) { let a = plan.seed; plan.rng = () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296 } }
   const c = composeJourney(plan)
-  return { ...(await render(c.events, c.duration, wet)), marks: c.marks, events: c.events.length }
+  const lay = layoutTimeline([{ rung: plan.from, hold: plan.holdA }, { rung: plan.to, hold: plan.holdB }], plan.shiftSeconds)
+  return { ...(await render(c.events, c.duration, wet, (t) => 0.45 - 0.2 * arousalAt(lay, t))), marks: c.marks, events: c.events.length }
 }
 ;(window as any).renderTimeline = async (plan: TimelinePlan & { seed?: number }, wet = 0.35) => {
   if (plan.seed != null) { let a = plan.seed; plan.rng = () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296 } }
   const c = composeTimeline(plan)
-  return { ...(await render(c.events, c.duration, wet)), marks: c.marks, events: c.events.length }
+  const lay = layoutTimeline(plan.waypoints, plan.walk)
+  return { ...(await render(c.events, c.duration, wet, (t) => 0.45 - 0.2 * arousalAt(lay, t))), marks: c.marks, events: c.events.length }
 }
 ;(window as any).renderNote = async (note: number, wet = 0) => render([{ time: 0, note, hold: 5 }], 5, wet)

@@ -5,6 +5,7 @@
     layoutTimeline,
     positionAt,
     textIndexAt,
+    arousalAt,
     ATTACK,
     RELEASE,
     type TimelinePlan,
@@ -88,6 +89,9 @@
   function report() {
     const t = Math.max(0, Tone.now() - t0)
     emit('progress', positionAt(layout, t), textIndexAt(layout, t))
+    // calmer music sits in a wetter room, livelier music in a drier one
+    const a = arousalAt(layout, t)
+    reverb?.wet.rampTo(0.45 - 0.2 * a, 0.5)
   }
 
   function clearTimers() {
@@ -112,7 +116,7 @@
     if (halted) return
 
     master = new Tone.Gain(0).toDestination()
-    reverb = new Tone.Reverb({ decay: 8, wet: 0.35 }).connect(master)
+    reverb = new Tone.Reverb({ decay: 8, wet: 0.35 }).connect(master) // wet follows arousal
     await reverb.ready
     if (halted) return
 

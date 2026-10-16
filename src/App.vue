@@ -44,12 +44,16 @@
 
   // One journey: settle for a fifth of its length, walk through the middle three
   // fifths, then stay with the last emotion until the drift is ended.
-  function planFor(rungs: number[], minutes: number) {
-    if (rungs.length === 1) return { waypoints: [{ rung: rungs[0], hold: Infinity }], walk: 0 }
+  function planFor(labels: string[], minutes: number) {
+    const moods = labels.map((label) => MOODS[label])
+    const rungs = moods.map((mood) => rungFor(mood.valence))
+    if (rungs.length === 1)
+      return { waypoints: [{ rung: rungs[0], hold: Infinity, arousal: moods[0].arousal }], walk: 0 }
     const total = minutes * 60
     return {
       waypoints: rungs.map((rung, i) => ({
         rung,
+        arousal: moods[i].arousal,
         hold: i === 0 ? total * 0.2 : i === rungs.length - 1 ? Infinity : 0,
       })),
       walk: (total * 0.6) / (rungs.length - 1),
@@ -75,10 +79,7 @@
     textIndex.value = 0
 
     plan.value = {
-      ...planFor(
-        emotions.value.map((label) => rungFor(MOODS[label].valence)),
-        journeyMinutes
-      ),
+      ...planFor(emotions.value, journeyMinutes),
       tonic: Math.floor(Math.random() * 12), // a fresh key each time, never shown
     }
     seed.value = Math.floor(Math.random() * 2 ** 31)
