@@ -124,11 +124,12 @@
     focused.value = null
     if (!hovered.value) previewDot(null)
   }
-  // Choosing a word that is already chosen takes it away again (it is a toggle button).
+  // Choosing the word that is the last stop takes it away again (it is a toggle button);
+  // choosing a word that is an earlier stop adds it again, so a journey can return home.
   function choose(e: Emotion) {
     if (props.drifting) return
-    const i = props.points.findIndex((p) => p.v === e.v && p.a === e.a)
-    if (i >= 0) emit('remove', i)
+    const last = props.points[props.points.length - 1]
+    if (last && last.v === e.v && last.a === e.a) emit('remove', props.points.length - 1)
     else emit('choose', { v: e.v, a: e.a })
   }
 
@@ -162,7 +163,13 @@
     const b = props.points[i + 1]
     return { v: a.v + (b.v - a.v) * t, a: a.a + (b.a - a.a) * t }
   })
-  const markerName = (i: number) => (i === 0 ? 'where you are' : 'where you would like to be')
+  // "where you are", then each stop, the last being where you would like to be
+  const markerName = (i: number) =>
+    i === 0
+      ? 'where you are'
+      : i === props.points.length - 1
+        ? `stop ${i + 1}, where you would like to be`
+        : `stop ${i + 1}`
 </script>
 
 <template>
@@ -174,16 +181,12 @@
     @pointercancel="cancel">
     <div ref="plane" class="plane" role="group" aria-label="Mood field">
       <svg
-        v-if="points.length === 2"
+        v-if="points.length >= 2"
         class="path"
         viewBox="0 0 100 100"
         preserveAspectRatio="none"
         aria-hidden="true">
-        <line
-          :x1="points[0].v * 100"
-          :y1="(1 - points[0].a) * 100"
-          :x2="points[1].v * 100"
-          :y2="(1 - points[1].a) * 100" />
+        <polyline :points="points.map((p) => `${p.v * 100},${(1 - p.a) * 100}`).join(' ')" />
       </svg>
 
       <button
@@ -212,14 +215,14 @@
         v-for="(p, i) in points"
         :key="`marker-${i}`"
         class="marker"
-        :class="{ destination: i === 1 }"
+        :class="{ destination: points.length > 1 && i === points.length - 1 }"
         :style="pos(p)"
         :aria-label="`${markerName(i)}: ${labelFor(p)}. Press to remove.`"
         :disabled="drifting"
         tabindex="-1"
         type="button"
         @click="emit('remove', i)">
-        <span class="ring"></span>
+        <span class="ring"><span class="num">{{ i + 1 }}</span></span>
         <span class="word">{{ labelFor(p) }}</span>
       </button>
 
@@ -317,26 +320,24 @@
 
   .marker .ring,
   .ghost .ring {
-    width: 24px;
-    height: 24px;
+    width: 26px;
+    height: 26px;
     border-radius: 50%;
     border: 2px solid var(--ink);
     position: relative;
   }
-  .marker .ring::after {
-    content: '';
-    position: absolute;
-    inset: 6px;
-    border-radius: 50%;
-    background: var(--ink);
+  .marker .ring {
+    display: grid;
+    place-items: center;
+  }
+  .num {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--ink);
+    line-height: 1;
   }
   .marker.destination .ring {
     border-style: dashed;
-  }
-  .marker.destination .ring::after {
-    background: transparent;
-    border: 2px solid var(--ink);
-    inset: 5px;
   }
   .marker:focus-visible .ring {
     outline: 2px solid var(--ink);
@@ -367,7 +368,8 @@
     overflow: visible;
     pointer-events: none;
   }
-  .path line {
+  .path polyline {
+    fill: none;
     stroke: var(--ink);
     stroke-opacity: 0.45;
     stroke-width: 1.5;

@@ -1,18 +1,19 @@
 <script setup lang="ts">
-  import { computed, ref } from 'vue'
+  import { ref } from 'vue'
   import { EMOTIONS, type Point } from './moodPlane'
 
-  // The fallback: the 21 words as two plain dropdowns. Anything the field can do by
-  // touch, pointer or arrow key, this can do with a screen reader, a switch or a
-  // keyboard that prefers lists.
+  // The fallback: the 21 words as plain dropdowns, one per stop of the journey, plus one more
+  // to add the next stop. Anything the field can do by touch, pointer or arrow key, this can do
+  // with a screen reader, a switch or a keyboard that prefers lists.
 
   const props = defineProps<{
     points: Point[]
     drifting: boolean
+    max: number
   }>()
 
   const emit = defineEmits<{
-    (e: 'set', index: 0 | 1, point: Point | null): void
+    (e: 'set', index: number, point: Point | null): void
   }>()
 
   const open = ref(false)
@@ -21,10 +22,16 @@
   // a free-placed point has no word of its own
   const labelOf = (p: Point | undefined) =>
     p ? EMOTIONS.find((e) => e.v === p.v && e.a === p.a)?.label ?? '' : ''
-  const from = computed(() => labelOf(props.points[0]))
-  const to = computed(() => labelOf(props.points[1]))
 
-  function pick(index: 0 | 1, ev: Event) {
+  // one dropdown per stop, and an empty one to add the next while there is room
+  const slots = () => {
+    const n = props.points.length
+    return Array.from({ length: Math.min(props.max, Math.max(1, n + 1)) }, (_, i) => i)
+  }
+  const caption = (i: number) =>
+    i === 0 ? 'where you are' : i < props.points.length ? `then (stop ${i + 1})` : 'then (optional)'
+
+  function pick(index: number, ev: Event) {
     const label = (ev.target as HTMLSelectElement).value
     const e = EMOTIONS.find((x) => x.label === label)
     emit('set', index, e ? { v: e.v, a: e.a } : null)
@@ -43,17 +50,15 @@
     </button>
 
     <div v-show="open" id="words-panel" class="panel">
-      <label>
-        <span>where you are</span>
-        <select :value="from" :disabled="drifting" @change="pick(0, $event)">
-          <option value="">{{ points[0] && !from ? 'a place on the field' : 'choose…' }}</option>
-          <option v-for="e in sorted" :key="e.label" :value="e.label">{{ e.label }}</option>
-        </select>
-      </label>
-      <label>
-        <span>where you would like to be (optional)</span>
-        <select :value="to" :disabled="drifting || !points[0]" @change="pick(1, $event)">
-          <option value="">{{ points[1] && !to ? 'a place on the field' : 'stay here' }}</option>
+      <label v-for="i in slots()" :key="i">
+        <span>{{ caption(i) }}</span>
+        <select
+          :value="labelOf(points[i])"
+          :disabled="drifting || (i > 0 && !points[i - 1])"
+          @change="pick(i, $event)">
+          <option value="">
+            {{ points[i] && !labelOf(points[i]) ? 'a place on the field' : i === 0 ? 'choose…' : i < points.length ? 'remove this stop' : 'stay here' }}
+          </option>
           <option v-for="e in sorted" :key="e.label" :value="e.label">{{ e.label }}</option>
         </select>
       </label>

@@ -161,3 +161,29 @@ export function palettePath(points: Point[], position: number): string[] {
 export function lightness(hex: string): number {
   return hexToLab(hex)[0]
 }
+
+// ── legibility ──────────────────────────────────────────────────────────────────────────
+// The interface's ink is light or dark, whichever has the better WCAG contrast on the colour
+// it sits over. The background is a top-to-bottom gradient, so the hint at the top, the field
+// in the middle and the ring at the bottom can each need a different ink.
+
+const channel = (c: number) => {
+  c /= 255
+  return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+}
+function luminance(hex: string): number {
+  const n = parseInt(hex.slice(1), 16)
+  return 0.2126 * channel((n >> 16) & 255) + 0.7152 * channel((n >> 8) & 255) + 0.0722 * channel(n & 255)
+}
+
+export const INK_LIGHT = 'rgb(255, 255, 255)'
+export const INK_DARK = 'rgb(24, 28, 40)'
+const L_LIGHT = luminance('#ffffff')
+const L_DARK = luminance('#181c28')
+
+export function inkFor(hex: string): { ink: string; contrast: string } {
+  const l = luminance(hex)
+  const withLight = (L_LIGHT + 0.05) / (l + 0.05)
+  const withDark = (l + 0.05) / (L_DARK + 0.05)
+  return withLight >= withDark ? { ink: INK_LIGHT, contrast: INK_DARK } : { ink: INK_DARK, contrast: INK_LIGHT }
+}

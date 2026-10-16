@@ -8,7 +8,7 @@
     describe,
     paletteAt,
     palettePath,
-    lightness,
+    inkFor,
     type Point,
   } from './moodPlane'
   import { rungFor } from '../engine/moods'
@@ -24,6 +24,8 @@
   // assumes two). `position` is the fractional index along it, driven by the audio clock.
   const points = ref<Point[]>([])
   const preview = ref<Point | null>(null)
+  // The most stops a journey can have. More is possible for the engine; this keeps the screen readable.
+  const MAX_POINTS = 6
   const minutes = ref(10) // length of the whole drift; Infinity never ends
   const drifting = ref(false)
   const position = ref(0)
@@ -50,15 +52,26 @@
     elapsed.value = 0
   }
 
+  const ordinal = (n: number) => `stop ${n}`
+
   function choose(p: Point) {
     if (drifting.value) return
+    const last = points.value[points.value.length - 1]
+    if (last && last.v === p.v && last.a === p.a) return // the same place again: nothing to add
     reset()
-    if (points.value.length === 0) {
+    const n = points.value.length
+    if (n === 0) {
       points.value = [p]
       say(`Where you are: ${wordFor(p)}. Choose where you would like to be, or begin.`)
+    } else if (n >= MAX_POINTS) {
+      points.value = [...points.value.slice(0, -1), p]
+      say(`The most stops is ${MAX_POINTS}. Replaced the last with ${wordFor(p)}.`)
     } else {
-      points.value = [points.value[0], p]
-      say(`Where you would like to be: ${wordFor(p)}. Begin when you are ready.`)
+      points.value = [...points.value, p]
+      say(
+        `${n === 1 ? 'Where you would like to be' : ordinal(n + 1)}: ${wordFor(p)}. ` +
+          (n + 1 < MAX_POINTS ? 'Add another stop, or begin.' : 'That is the most stops. Begin when you are ready.')
+      )
     }
   }
 
@@ -77,33 +90,38 @@
     say('Cleared.')
   }
 
-  // the word lists: set one end of the journey, or take it away
-  function setFromWords(index: 0 | 1, p: Point | null) {
+  // the word lists: set a stop, add the next, or take one away
+  function setFromWords(index: number, p: Point | null) {
     if (drifting.value) return
     reset()
-    if (index === 0) {
-      points.value = p ? [p, ...points.value.slice(1)] : []
-    } else {
-      points.value = p ? [points.value[0], p] : points.value.slice(0, 1)
+    if (!p) {
+      points.value = points.value.filter((_, k) => k !== index)
+      say('Removed a stop.')
+      return
     }
-    say(p ? `${index === 0 ? 'Where you are' : 'Where you would like to be'}: ${wordFor(p)}.` : 'Cleared.')
+    if (index < points.value.length) points.value = points.value.map((q, k) => (k === index ? p : q))
+    else if (index === points.value.length && index < MAX_POINTS) points.value = [...points.value, p]
+    say(`${index === 0 ? 'Where you are' : ordinal(index + 1)}: ${wordFor(p)}.`)
   }
 
   // ── a drift ─────────────────────────────────────────────────────────────────────────
-  // Length is for the whole drift: a fifth or so settled where you are, over half of it
-  // travelling, the rest arriving and fading out. ∞ travels over ten minutes, then stays.
+  // Length is for the whole drift: 15% settled where you are, 30% arriving where you are going
+  // (ending in the fade), and the middle 55% travelling — split between the legs, with a brief
+  // settle (a third of a leg) at each stop in between so every mood is heard. ∞ travels over
+  // ten minutes, then stays.
   function planFor(pts: Point[], m: number) {
     const endless = m === Infinity
     const total = (endless ? 10 : m) * 60
     const moods = pts.map((p) => ({ rung: rungFor(p.v), arousal: p.a }))
-    if (moods.length === 1)
-      return { waypoints: [{ ...moods[0], hold: endless ? Infinity : total }], walk: 0 }
+    const n = moods.length
+    if (n === 1) return { waypoints: [{ ...moods[0], hold: endless ? Infinity : total }], walk: 0 }
+    const leg = (total * 0.55) / (n - 1 + 0.3 * (n - 2))
     return {
       waypoints: moods.map((mood, i) => ({
         ...mood,
-        hold: i === 0 ? total * 0.15 : endless ? Infinity : total * 0.3,
+        hold: i === 0 ? total * 0.15 : i === n - 1 ? (endless ? Infinity : total * 0.3) : leg * 0.3,
       })),
-      walk: (total * 0.55) / (moods.length - 1),
+      walk: leg,
     }
   }
 
@@ -122,9 +140,11 @@
     drifting.value = true
     preview.value = null
     const words = points.value.map(wordFor)
-    say(
-      `Drifting ${words.length > 1 ? `from ${words[0]} to ${words[1]}` : `in ${words[0]}`} ${lengthName(minutes.value)}.`
-    )
+    const route =
+      words.length === 1
+        ? `in ${words[0]}`
+        : `from ${words[0]}${words.length > 2 ? ` through ${words.slice(1, -1).join(', ')}` : ''} to ${words[words.length - 1]}`
+    say(`Drifting ${route} ${lengthName(minutes.value)}.`)
   }
 
   function onProgress(newPosition: number, _text: number, seconds: number) {
@@ -163,27 +183,30 @@
     return IDLE
   })
 
-  // Ink is dark on light colours and light on dark ones, so the interface stays legible
-  // wherever on the field you are.
-  const light = computed(
-    () => palette.value.reduce((sum, hex) => sum + lightness(hex), 0) / palette.value.length > 0.7
-  )
-  const ink = computed(() => (light.value ? 'rgb(24, 28, 40)' : 'rgb(255, 255, 255)'))
-  const inkContrast = computed(() => (light.value ? 'rgb(255, 255, 255)' : 'rgb(24, 28, 40)'))
+  // The background runs top to bottom through the palette's three colours, so each part of the
+  // interface takes the ink that reads best over the colour behind it: the hint at the top, the
+  // field in the middle, the ring at the bottom.
+  const topInk = computed(() => inkFor(palette.value[0]))
+  const midInk = computed(() => inkFor(palette.value[1]))
+  const bottomInk = computed(() => inkFor(palette.value[2]))
+  const vars = (i: { ink: string; contrast: string }) => ({ '--ink': i.ink, '--ink-contrast': i.contrast })
 
   const hint = computed(() => {
     if (drifting.value) return ''
     if (!points.value.length) return 'touch where you are'
     if (points.value.length === 1) return 'now where you would like to be, or begin'
+    if (points.value.length < MAX_POINTS) return 'add another stop, or begin'
     return ''
   })
 </script>
 
 <template>
-  <main class="field-app" :style="{ '--ink': ink, '--ink-contrast': inkContrast }">
+  <main class="field-app" :style="vars(midInk)">
     <FieldBackground :palette="palette" />
 
-    <WordsFallback :points="points" :drifting="drifting" @set="setFromWords" />
+    <div :style="vars(topInk)">
+      <WordsFallback :points="points" :drifting="drifting" :max="MAX_POINTS" @set="setFromWords" />
+    </div>
 
     <MoodField
       :points="points"
@@ -194,15 +217,17 @@
       @clear="clear"
       @preview="preview = $event" />
 
-    <p class="hint" aria-hidden="true">{{ hint }}</p>
+    <p class="hint" :style="vars(topInk)" aria-hidden="true">{{ hint }}</p>
 
-    <JourneyRing
-      v-model="minutes"
-      :drifting="drifting"
-      :can-begin="points.length > 0"
-      :progress="progress"
-      @begin="begin"
-      @stop="stop" />
+    <div :style="vars(bottomInk)">
+      <JourneyRing
+        v-model="minutes"
+        :drifting="drifting"
+        :can-begin="points.length > 0"
+        :progress="progress"
+        @begin="begin"
+        @stop="stop" />
+    </div>
 
     <GenerativePlayer
       v-if="audioActive"
