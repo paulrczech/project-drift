@@ -1,107 +1,145 @@
 <script setup lang="ts">
-  import { ref } from 'vue'
+  import { defineAsyncComponent, ref } from 'vue'
   import EmotionSelector from './components/EmotionSelector.vue'
   import EmotionalSnippet from './components/EmotionalSnippet.vue'
   import BreathingBackground from './components/BreathingBackground.vue'
-  import AudioPlayer from './components/AudioPlayer.vue'
   import { emotionProfiles } from './data/EmotionConfig'
+  import { MOODS, rungFor } from './engine/moods'
+  import type { TimelinePlan } from './engine/compose'
+
+  // Tone.js is large and only needed once a drift starts, so the players load on demand.
+  const GenerativePlayer = defineAsyncComponent(
+    () => import('./components/GenerativePlayer.vue')
+  )
+  const AudioPlayer = defineAsyncComponent(
+    () => import('./components/AudioPlayer.vue')
+  )
+
+  // `?engine=loops` plays the original recorded loops, for comparing the two.
+  const useLoops = new URLSearchParams(window.location.search).get('engine') === 'loops'
 
   const hasSelected = ref(false)
   // The audio outlives "End Drift" by its fade-out; `session` remounts it on restart
   const audioActive = ref(false)
   const session = ref(0)
   let audioTeardown: number | undefined
-  const isFadingOut = ref(false)
 
-  const isDrifting = ref(false)
-  const audioPlayerRef = ref<InstanceType<typeof AudioPlayer> | null>(null)
+  const playerRef = ref<{ stopDrift: () => void } | null>(null)
   const emotionSelectorRef = ref<InstanceType<typeof EmotionSelector> | null>(
     null
   )
 
-  // Selected visual/audio/text properties
+  // Text and visuals follow the audio clock. `emotions` can hold any number, in
+  // journey order; `position` is the fractional index along them (0.5 = halfway
+  // from the first to the second), `textIndex` which one's line is showing.
   const defaultMessage = 'Welcome to Drift.'
-  const emotionA = ref('')
-  const emotionB = ref('')
-  const snippetA = ref(defaultMessage)
-  const snippetB = ref('')
+  const emotions = ref<string[]>([])
+  const snippets = ref<string[]>([defaultMessage])
+  const position = ref(0)
+  const textIndex = ref(0)
+  const backgroundFade = ref(0.5)
+  const textFade = ref(6)
+
+  // Generative drift
+  const plan = ref<Omit<TimelinePlan, 'rng'>>({ waypoints: [], walk: 0 })
+  const seed = ref(0)
+
+  // Loops (original engine)
   const samplesA = ref<string[]>([])
   const samplesB = ref<string[]>([])
-
-  // The audio Transport drives the cycle; text and visuals follow its fade events
-  const activeSide = ref<'A' | 'B'>('A')
-  const fadeSeconds = ref(0)
-
   const crossfadeInterval = ref(16000)
 
-  function handleFade(to: 'A' | 'B', seconds: number) {
-    fadeSeconds.value = seconds
-    activeSide.value = to
+  function handleProgress(newPosition: number, newTextIndex: number) {
+    position.value = newPosition
+    textIndex.value = newTextIndex
   }
 
-  function handleSubmit(selectedEmotions: string[]) {
+  function handleFade(to: 'A' | 'B', seconds: number) {
+    backgroundFade.value = seconds
+    textFade.value = seconds
+    position.value = to === 'A' ? 0 : 1
+    textIndex.value = position.value
+  }
+
+  // One journey: settle for a fifth of its length, walk through the middle three
+  // fifths, then stay with the last emotion until the drift is ended.
+  function planFor(rungs: number[], minutes: number) {
+    if (rungs.length === 1) return { waypoints: [{ rung: rungs[0], hold: Infinity }], walk: 0 }
+    const total = minutes * 60
+    return {
+      waypoints: rungs.map((rung, i) => ({
+        rung,
+        hold: i === 0 ? total * 0.2 : i === rungs.length - 1 ? Infinity : 0,
+      })),
+      walk: (total * 0.6) / (rungs.length - 1),
+    }
+  }
+
+  function handleSubmit(selectedEmotions: string[], journeyMinutes: number) {
     if (!selectedEmotions.length) return
 
-    isFadingOut.value = true
     hasSelected.value = true
-    isDrifting.value = true
     clearTimeout(audioTeardown)
     session.value++
     audioActive.value = true
 
-    // Keep the user's pick order so A is always the first emotion chosen
-    const selectedProfiles = selectedEmotions
+    // Keep the user's pick order: the journey runs from the first emotion chosen
+    const profiles = selectedEmotions
       .map((label) => emotionProfiles.find((profile) => profile.label === label))
       .filter((profile) => profile !== undefined)
 
-    activeSide.value = 'A'
-    fadeSeconds.value = (crossfadeInterval.value / 1000) * 0.3
+    emotions.value = profiles.map((profile) => profile.label)
+    snippets.value = profiles.map((profile) => profile.snippet)
+    position.value = 0
+    textIndex.value = 0
 
-    emotionA.value = selectedProfiles[0].label
-    emotionB.value = selectedProfiles[1]?.label ?? ''
-
-    snippetA.value = selectedProfiles[0].snippet
-    snippetB.value = selectedProfiles[1]?.snippet ?? ''
-
-    if (selectedProfiles.length === 1) {
-      samplesA.value = [selectedProfiles[0].samples[0]]
-      samplesB.value = [selectedProfiles[0].samples[1]]
-    } else {
-      samplesA.value = selectedProfiles[0].samples
-      samplesB.value = selectedProfiles[1].samples
+    if (useLoops) {
+      backgroundFade.value = (crossfadeInterval.value / 1000) * 0.3
+      textFade.value = backgroundFade.value
+      const [a, b] = profiles
+      samplesA.value = b ? a.samples : [a.samples[0]]
+      samplesB.value = b ? b.samples : [a.samples[1]]
+      return
     }
+
+    backgroundFade.value = 0.5
+    textFade.value = 6
+    plan.value = {
+      ...planFor(
+        emotions.value.map((label) => rungFor(MOODS[label].valence)),
+        journeyMinutes
+      ),
+      tonic: Math.floor(Math.random() * 12), // a fresh key each time, never shown
+    }
+    seed.value = Math.floor(Math.random() * 2 ** 31)
+    console.info('drift', { emotions: emotions.value, journeyMinutes, tonic: plan.value.tonic, seed: seed.value })
   }
 
   function stopDrift() {
-    audioPlayerRef.value?.stopDrift()
+    playerRef.value?.stopDrift()
     emotionSelectorRef.value?.reset()
-    isDrifting.value = false
-    isFadingOut.value = true
     hasSelected.value = false
     // Unmount only after the 3s audio fade, or the player is disposed mid-fade
     audioTeardown = window.setTimeout(() => (audioActive.value = false), 3100)
-    snippetA.value = defaultMessage
-    snippetB.value = ''
-    emotionA.value = ''
-    emotionB.value = ''
-    activeSide.value = 'A'
+    emotions.value = []
+    snippets.value = [defaultMessage]
+    position.value = 0
+    textIndex.value = 0
   }
 </script>
 
 <template>
   <BreathingBackground
-    :emotionA="emotionA"
-    :emotionB="emotionB"
-    :activeSide="activeSide"
-    :fadeSeconds="fadeSeconds"
+    :emotions="emotions"
+    :position="position"
+    :fadeSeconds="backgroundFade"
     gradientType="radial" />
 
   <div class="app-container">
     <EmotionalSnippet
-      :snippetA="snippetA"
-      :snippetB="snippetB"
-      :activeSide="activeSide"
-      :fadeSeconds="fadeSeconds" />
+      :snippets="snippets"
+      :index="textIndex"
+      :fadeSeconds="textFade" />
 
     <div class="emotion-bar">
       <EmotionSelector
@@ -109,14 +147,23 @@
         @submit:selected="handleSubmit"
         @end:drift="stopDrift" />
 
-      <AudioPlayer
-        v-if="audioActive"
-        :key="session"
-        ref="audioPlayerRef"
-        :samplesA="samplesA"
-        :samplesB="samplesB"
-        :crossfadeInterval="crossfadeInterval"
-        @fade="handleFade" />
+      <template v-if="audioActive">
+        <AudioPlayer
+          v-if="useLoops"
+          :key="session"
+          ref="playerRef"
+          :samplesA="samplesA"
+          :samplesB="samplesB"
+          :crossfadeInterval="crossfadeInterval"
+          @fade="handleFade" />
+        <GenerativePlayer
+          v-else
+          :key="session"
+          ref="playerRef"
+          :plan="plan"
+          :seed="seed"
+          @progress="handleProgress" />
+      </template>
     </div>
   </div>
 </template>

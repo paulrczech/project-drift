@@ -1,25 +1,21 @@
 <script setup lang="ts">
   interface Props {
-    snippetA: string
-    snippetB: string
-    activeSide: 'A' | 'B'
+    snippets: string[] // in journey order
+    index: number // which one is showing
     fadeSeconds: number
   }
 
   const props = defineProps<Props>()
-
-  // With a single emotion there is no B line, so A stays put
-  const isActive = (side: 'A' | 'B') =>
-    side === 'A' ? !props.snippetB || props.activeSide === 'A' : props.activeSide === 'B'
 </script>
 
 <template>
   <div class="snippet-container" :style="{ '--fade': props.fadeSeconds + 's' }">
-    <p class="snippet-text" :class="{ active: isActive('A') }" v-if="props.snippetA">
-      {{ props.snippetA }}
-    </p>
-    <p class="snippet-text" :class="{ active: isActive('B') }" v-if="props.snippetB">
-      {{ props.snippetB }}
+    <p
+      v-for="(snippet, i) in props.snippets"
+      :key="i"
+      class="snippet-text"
+      :class="{ active: i === props.index }">
+      {{ snippet }}
     </p>
   </div>
 </template>

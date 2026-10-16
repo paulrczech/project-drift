@@ -4,12 +4,16 @@
   import { emotionProfiles } from '../data/EmotionConfig'
 
   const emit = defineEmits<{
-    (e: 'submit:selected', emotions: string[]): void
+    (e: 'submit:selected', emotions: string[], journeyMinutes: number): void
     (e: 'end:drift'): void
   }>()
 
   const selectedEmotions = ref<string[]>([])
   const isSelected = ref(false)
+
+  // Only a two-emotion drift travels anywhere, so only then is there a length to pick.
+  const journeyOptions = [1, 5, 10, 20]
+  const journeyMinutes = ref(5)
 
   const emotionColors: Record<string, string> = {
     happy: 'emotion-happy',
@@ -48,7 +52,7 @@
 
   function handleSubmit() {
     if (selectedEmotions.value.length === 0) return
-    emit('submit:selected', selectedEmotions.value)
+    emit('submit:selected', selectedEmotions.value, journeyMinutes.value)
     isSelected.value = true
   }
 
@@ -83,6 +87,22 @@
       </template>
     </Multiselect>
 
+    <div
+      v-if="!isSelected && selectedEmotions.length === 2"
+      class="journey-length"
+      role="group"
+      aria-label="Journey length in minutes">
+      <button
+        v-for="minutes in journeyOptions"
+        :key="minutes"
+        type="button"
+        :class="{ active: minutes === journeyMinutes }"
+        :aria-pressed="minutes === journeyMinutes"
+        @click="journeyMinutes = minutes">
+        {{ minutes }} min
+      </button>
+    </div>
+
     <button
       v-if="!isSelected"
       class="submit-button"
@@ -102,6 +122,31 @@
     display: flex;
     align-items: center;
     gap: 1rem;
+  }
+
+  .journey-length {
+    display: flex;
+    gap: 0.25rem;
+    padding: 0.25rem;
+    background-color: rgba(0, 0, 0, 0.25);
+    border-radius: 1.5rem;
+  }
+
+  .journey-length button {
+    padding: 0.25rem 0.6rem;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 0.75rem;
+    border: none;
+    border-radius: 1.25rem;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color 0.3s ease;
+  }
+
+  .journey-length button.active {
+    background-color: rgba(0, 0, 0, 0.55);
+    color: white;
   }
 
   .submit-button {

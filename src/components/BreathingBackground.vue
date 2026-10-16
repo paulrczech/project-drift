@@ -3,10 +3,9 @@
   import { emotionPalettes } from '../data/EmotionGradient'
 
   interface Props {
-    emotionA: string
-    emotionB: string
-    activeSide: 'A' | 'B'
-    fadeSeconds: number
+    emotions: string[] // in journey order; empty when idle
+    position: number // fractional index along `emotions`: 0 = first, 1 = second, 0.5 = halfway
+    fadeSeconds: number // how smoothly a layer follows `position`
     gradientType?: 'random' | 'linear' | 'radial' | 'conic'
   }
 
@@ -39,50 +38,50 @@
     }
   }
 
-  function gradientFor(emotion: string): string {
-    const colors = emotionPalettes[emotion.toLowerCase()] ?? ['#ccc', '#eee']
-    return getGradient(colors, props.gradientType ?? 'random')
-  }
-
-  // The resting gradient sits underneath; A and B fade in over it.
+  // The resting gradient sits underneath; the emotions stack on top of it.
   const idleGradient = getGradient(defaultColors, props.gradientType ?? 'random')
-  // Layers always exist and keep their last gradient, so they can fade out
-  // after the emotion is cleared instead of vanishing.
-  const gradientA = ref('')
-  const gradientB = ref('')
+
+  // Layers keep their last gradients, so the stack can fade out after the emotions
+  // are cleared instead of vanishing.
+  const gradients = ref<string[]>([])
   watch(
-    () => props.emotionA,
-    (emotion) => {
-      if (emotion) gradientA.value = gradientFor(emotion)
-    },
-    { immediate: true }
-  )
-  watch(
-    () => props.emotionB,
-    (emotion) => {
-      if (emotion) gradientB.value = gradientFor(emotion)
+    () => props.emotions,
+    (emotions) => {
+      if (!emotions.length) return
+      gradients.value = emotions.map((emotion) =>
+        getGradient(
+          emotionPalettes[emotion.toLowerCase()] ?? ['#ccc', '#eee'],
+          props.gradientType ?? 'random'
+        )
+      )
     },
     { immediate: true }
   )
 
-  // With a single emotion there is no B, so A stays put
-  const aOn = computed(() => !!props.emotionA && (!props.emotionB || props.activeSide === 'A'))
-  const bOn = computed(() => !!props.emotionB && props.activeSide === 'B')
+  const active = computed(() => props.emotions.length > 0)
+
+  // The first emotion is opaque; each later one fades in over the one before as the
+  // drift reaches it. Fading over an opaque layer (not against its neighbour) means the
+  // resting gradient never shows through mid-fade.
+  const layerOpacity = (i: number) =>
+    i === 0 ? 1 : Math.min(1, Math.max(0, props.position - (i - 1)))
 </script>
 
 <template>
   <div class="background-layer">
     <div class="breathing-background" :style="{ background: idleGradient }"></div>
   </div>
-  <div
-    class="background-layer"
-    :style="{ opacity: aOn ? 1 : 0, transitionDuration: props.fadeSeconds + 's' }">
-    <div class="breathing-background" :style="{ background: gradientA }"></div>
-  </div>
-  <div
-    class="background-layer"
-    :style="{ opacity: bOn ? 1 : 0, transitionDuration: props.fadeSeconds + 's' }">
-    <div class="breathing-background" :style="{ background: gradientB }"></div>
+  <div class="background-layer stack" :style="{ opacity: active ? 1 : 0 }">
+    <div
+      v-for="(gradient, i) in gradients"
+      :key="i"
+      class="background-layer"
+      :style="{
+        opacity: layerOpacity(i),
+        transitionDuration: props.fadeSeconds + 's',
+      }">
+      <div class="breathing-background" :style="{ background: gradient }"></div>
+    </div>
   </div>
 </template>
 
@@ -95,6 +94,17 @@
     height: 100vh;
     z-index: -2;
     transition: opacity 1s ease-in-out;
+  }
+
+  /* Updates arrive a few times a second, so layers follow them linearly:
+     ease-in-out would pulse at every update. */
+  .stack {
+    transition-duration: 3s;
+  }
+
+  .stack > .background-layer {
+    z-index: auto;
+    transition-timing-function: linear;
   }
 
   /* The wrapper fades between A and B; the inner layer breathes, since the
