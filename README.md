@@ -1,6 +1,6 @@
 # Project Drift
 
-Project Drift is an ambient emotional environment that combines breathing visuals, crossfading soundscapes, and soft UX interactions to create a meditative experience. Built with Vue 3, Tone.js, and Netlify.
+Project Drift is an ambient emotional environment that combines breathing visuals, generative voice-led harmony, and soft UX interactions to create a meditative experience. Built with Vue 3, Tone.js, and Netlify.
 
 View Live Site: https://project-drift.netlify.app/
 

@@ -7,16 +7,10 @@
   import { MOODS, rungFor } from './engine/moods'
   import type { TimelinePlan } from './engine/compose'
 
-  // Tone.js is large and only needed once a drift starts, so the players load on demand.
+  // Tone.js is large and only needed once a drift starts, so the player loads on demand.
   const GenerativePlayer = defineAsyncComponent(
     () => import('./components/GenerativePlayer.vue')
   )
-  const AudioPlayer = defineAsyncComponent(
-    () => import('./components/AudioPlayer.vue')
-  )
-
-  // `?engine=loops` plays the original recorded loops, for comparing the two.
-  const useLoops = new URLSearchParams(window.location.search).get('engine') === 'loops'
 
   const hasSelected = ref(false)
   // The audio outlives "End Drift" by its fade-out; `session` remounts it on restart
@@ -37,28 +31,15 @@
   const snippets = ref<string[]>([defaultMessage])
   const position = ref(0)
   const textIndex = ref(0)
-  const backgroundFade = ref(0.5)
-  const textFade = ref(6)
+  const backgroundFade = 0.5 // seconds a layer takes to follow each 250ms position update
+  const textFade = 6 // seconds for the line to crossfade at a walk's midpoint
 
-  // Generative drift
   const plan = ref<Omit<TimelinePlan, 'rng'>>({ waypoints: [], walk: 0 })
   const seed = ref(0)
-
-  // Loops (original engine)
-  const samplesA = ref<string[]>([])
-  const samplesB = ref<string[]>([])
-  const crossfadeInterval = ref(16000)
 
   function handleProgress(newPosition: number, newTextIndex: number) {
     position.value = newPosition
     textIndex.value = newTextIndex
-  }
-
-  function handleFade(to: 'A' | 'B', seconds: number) {
-    backgroundFade.value = seconds
-    textFade.value = seconds
-    position.value = to === 'A' ? 0 : 1
-    textIndex.value = position.value
   }
 
   // One journey: settle for a fifth of its length, walk through the middle three
@@ -93,17 +74,6 @@
     position.value = 0
     textIndex.value = 0
 
-    if (useLoops) {
-      backgroundFade.value = (crossfadeInterval.value / 1000) * 0.3
-      textFade.value = backgroundFade.value
-      const [a, b] = profiles
-      samplesA.value = b ? a.samples : [a.samples[0]]
-      samplesB.value = b ? b.samples : [a.samples[1]]
-      return
-    }
-
-    backgroundFade.value = 0.5
-    textFade.value = 6
     plan.value = {
       ...planFor(
         emotions.value.map((label) => rungFor(MOODS[label].valence)),
@@ -147,23 +117,13 @@
         @submit:selected="handleSubmit"
         @end:drift="stopDrift" />
 
-      <template v-if="audioActive">
-        <AudioPlayer
-          v-if="useLoops"
-          :key="session"
-          ref="playerRef"
-          :samplesA="samplesA"
-          :samplesB="samplesB"
-          :crossfadeInterval="crossfadeInterval"
-          @fade="handleFade" />
-        <GenerativePlayer
-          v-else
-          :key="session"
-          ref="playerRef"
-          :plan="plan"
-          :seed="seed"
-          @progress="handleProgress" />
-      </template>
+      <GenerativePlayer
+        v-if="audioActive"
+        :key="session"
+        ref="playerRef"
+        :plan="plan"
+        :seed="seed"
+        @progress="handleProgress" />
     </div>
   </div>
 </template>
