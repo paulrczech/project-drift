@@ -85,20 +85,32 @@ const MAX_LAST = 7.5 // default longest final link (the samples are 8s)
 export interface Walk {
   start: number
   end: number
+  flips: number[] // times of the ladder flips that fall in this walk (after merging)
+}
+
+// One step up (+1, brighter) or down (-1, darker) the ladder.
+export interface Flip {
+  time: number
   dir: 1 | -1
-  flips: number[] // times of the ladder flips
 }
 
 export interface Layout {
   walks: Walk[]
+  flips: Flip[] // every ladder step, in time order
   arousals: number[] // per waypoint
   duration: number // Infinity if the last hold is Infinity
 }
 
 export const DEFAULT_AROUSAL = 0.4
 
+// The pad fades in over ~2s and out over ~2s, so changes of mode closer together than this
+// blur into one another. Steps that would land closer are made together, as one change of
+// several semitone moves — still voice-led, and still arriving where the journey goes.
+export const MIN_FLIP_GAP = 2.5
+
 export function layoutTimeline(waypoints: Waypoint[], walk: number | number[]): Layout {
   const walks: Walk[] = []
+  const raw: Flip[] = []
   let at = 0
   waypoints.forEach((w, i) => {
     at += w.hold
@@ -106,15 +118,27 @@ export function layoutTimeline(waypoints: Waypoint[], walk: number | number[]): 
     if (!next) return
     const seconds = Array.isArray(walk) ? walk[i] : walk
     const n = Math.abs(next.rung - w.rung)
-    walks.push({
-      start: at,
-      end: at + seconds,
-      dir: next.rung > w.rung ? 1 : -1,
-      flips: Array.from({ length: n }, (_, k) => at + ((k + 0.5) * seconds) / n),
-    })
+    const dir = next.rung > w.rung ? 1 : -1
+    for (let k = 0; k < n; k++) raw.push({ time: at + ((k + 0.5) * seconds) / n, dir })
+    walks.push({ start: at, end: at + seconds, flips: [] })
     at += seconds
   })
-  return { walks, arousals: waypoints.map((w) => w.arousal ?? DEFAULT_AROUSAL), duration: at }
+
+  // Merge steps that fall within MIN_FLIP_GAP of the first of their group. Steps in
+  // opposite directions cancel, so a brief excursion too quick to hear is simply skipped.
+  const flips: Flip[] = []
+  for (let i = 0; i < raw.length; ) {
+    let j = i
+    let net = 0
+    while (j < raw.length && raw[j].time - raw[i].time < MIN_FLIP_GAP) net += raw[j++].dir
+    for (let k = 0; k < Math.abs(net); k++) flips.push({ time: raw[i].time, dir: net > 0 ? 1 : -1 })
+    i = j
+  }
+  for (const f of flips) {
+    const w = walks.find((x) => f.time >= x.start && f.time <= x.end)
+    if (w) w.flips.push(f.time)
+  }
+  return { walks, flips, arousals: waypoints.map((w) => w.arousal ?? DEFAULT_AROUSAL), duration: at }
 }
 
 // Arousal at time t: constant while settled, a straight line along each walk.
@@ -181,7 +205,7 @@ export class Composer {
   private closed: Entry[] = []
   private nextId = 0
   private t: number // every harmonic move before t has been made
-  private flips: { time: number; dir: 1 | -1 }[]
+  private flips: Flip[]
   private nextFlip = 0
   private finished = false
 
@@ -195,7 +219,7 @@ export class Composer {
     this.settle = this.overlap + 0.5
     this.lookahead = Math.max(...this.links) * 1.15 + this.settle + 1
     this.layout = layoutTimeline(plan.waypoints, plan.walk)
-    this.flips = this.layout.walks.flatMap((w) => w.flips.map((time) => ({ time, dir: w.dir })))
+    this.flips = this.layout.flips
     this.engine = new DriftEngine({
       rung: plan.waypoints[0].rung,
       tonic: plan.tonic,
