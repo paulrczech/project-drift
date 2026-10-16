@@ -1,7 +1,7 @@
 // Offline-render journeys to WAV through the real engine + sampler, in headless Chromium.
 //   Needs: npm i --no-save playwright-core   (Chromium from Playwright's cache, or set CHROME=...)
 //   node scripts/render/run.mjs timelines '[["film",{"waypoints":[{"rung":5,"hold":6},{"rung":3,"hold":4},{"rung":0,"hold":6}],"walk":[6,8],"tonic":2,"seed":3}]]'
-//   (add "tonic": 0-11 to either plan; default 2 = D)
+//   (add "tonic": 0-11 and "voice": "pad" | "choir" to either plan; defaults D and pad)
 //   node scripts/render/run.mjs pitch
 //   node scripts/render/run.mjs journeys '[["name",{"from":5,"to":1,"holdA":40,"shiftSeconds":40,"holdB":40,"seed":7}]]'
 // Output: renders/<name>.wav (gitignored), normalised to -3 dB for listening.
@@ -40,7 +40,7 @@ try {
       const t = Date.now()
       const r = await page.evaluate(([f, p]) => window[f](p), [fn, plan])
       fs.writeFileSync(`${OUT}/${name}.wav`, Buffer.from(r.wav, 'base64'))
-      console.log(name, `${((Date.now() - t) / 1000).toFixed(1)}s, events ${r.events}, raw peak ${r.peak.toFixed(3)}, shifts at`, r.marks.map((m) => m.time.toFixed(0) + 's').join(','))
+      console.log(name, `${((Date.now() - t) / 1000).toFixed(1)}s, events ${r.events}, raw peak ${r.peak.toFixed(3)}, raw rms ${r.rms.toFixed(4)}, gain ${r.gain.toFixed(4)}, shifts at`, r.marks.map((m) => m.time.toFixed(0) + 's').join(','))
     }
   }
 } finally {

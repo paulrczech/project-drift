@@ -16,6 +16,7 @@ export interface NoteEvent {
   time: number // seconds from the start
   note: number // MIDI
   hold: number // seconds before release
+  chain: number // which re-strike schedule this belongs to (a layer plays only its own chain)
 }
 
 export interface Mark {
@@ -38,31 +39,48 @@ export interface TimelinePlan {
   waypoints: Waypoint[]
   walk: number | number[] // seconds per walk (one value, or one per gap between waypoints)
   tonic?: number // pitch class, 0-11 (default D)
+  register?: number // semitones to shift the register (a high voice sits higher)
+  span?: number // semitones between the lowest and highest note any voice may reach
+  ceiling?: number // an absolute highest note
+  // How the voice's samples are re-struck (defaults suit 8s pad samples):
+  attack?: number // seconds the sampler takes to fade a note in
+  link?: number // seconds between re-strikes of a held voice
+  links?: number[] // or one interval per chain (see NoteEvent.chain); overrides `link`
+  overlap?: number // seconds an old strike goes on after the next one starts (default: attack)
+  maxHold?: number // longest a single strike may be held (shorter than the samples)
   beat?: number // fixed seconds between harmonic moves; by default arousal sets it
   rng?: () => number
 }
 
-export interface JourneyPlan {
+// What a voice asks of the composer (see voices.ts); all optional.
+export interface VoiceParams {
+  tonic?: number // pitch class, 0-11 (default D)
+  register?: number
+  span?: number
+  ceiling?: number
+  attack?: number
+  link?: number
+  links?: number[] // one re-strike interval per chain, so layers do not pulse in unison
+  overlap?: number // seconds an old strike goes on after the next one starts (default: attack)
+  maxHold?: number
+  beat?: number
+  rng?: () => number
+}
+
+export interface JourneyPlan extends VoiceParams {
   from: Rung
   to: Rung
   holdA: number // seconds settled in the first mode
   shiftSeconds: number // seconds spent walking the ladder
   holdB: number // seconds settled in the second mode
-  tonic?: number
-  beat?: number
-  rng?: () => number
 }
 
 export const ATTACK = 2 // sampler fade-in, seconds (keep in step with the sampler)
 export const RELEASE = 3
-const LINK = 5.5 // seconds between re-articulations of a held voice
+const LINK = 5.5 // default seconds between re-articulations of a held voice
 const OPENING_STAGGER = 1.5 // seconds between the voices entering at the start
 const MIN_BEAT = 2 // the pad's fade-in is 2s; faster harmonic moves just smear
-const MAX_LAST = 7.5 // longest final link (the samples are 8s)
-const SETTLE = ATTACK + 0.5 // a link this close to a voice's end is merged into the last one
-// How far ahead of `until` the engine must have run before a link can be judged final:
-// the next link time (≤ 1.15 × LINK) plus SETTLE.
-const LOOKAHEAD = LINK * 1.15 + SETTLE + 1
+const MAX_LAST = 7.5 // default longest final link (the samples are 8s)
 
 export interface Walk {
   start: number
@@ -133,8 +151,7 @@ interface Entry {
   note: number
   start: number
   end: number // Infinity while the voice is still sounding
-  at: number // time of the next link to emit
-  k: number // index of the next link
+  chains: { at: number; k: number }[] // per chain: time of the next link, and its index (-1: complete)
 }
 
 // Deterministic jitter per (seed, voice, link), so the result does not depend on how
@@ -154,6 +171,12 @@ export class Composer {
   private rng: () => number
   private beat: number | undefined
   private linkSeed: number
+  private attack: number
+  private links: number[]
+  private overlap: number
+  private maxLast: number
+  private settle: number // a link this close to a voice's end is merged into the last one
+  private lookahead: number // how far the engine must run before a link can be judged final
   private open = new Map<number, Entry>()
   private closed: Entry[] = []
   private nextId = 0
@@ -165,11 +188,20 @@ export class Composer {
   constructor(plan: TimelinePlan) {
     this.rng = plan.rng ?? Math.random
     this.beat = plan.beat
+    this.attack = plan.attack ?? ATTACK
+    this.links = plan.links ?? [plan.link ?? LINK]
+    this.overlap = plan.overlap ?? this.attack
+    this.maxLast = plan.maxHold ?? MAX_LAST
+    this.settle = this.overlap + 0.5
+    this.lookahead = Math.max(...this.links) * 1.15 + this.settle + 1
     this.layout = layoutTimeline(plan.waypoints, plan.walk)
     this.flips = this.layout.walks.flatMap((w) => w.flips.map((time) => ({ time, dir: w.dir })))
     this.engine = new DriftEngine({
       rung: plan.waypoints[0].rung,
       tonic: plan.tonic,
+      register: plan.register,
+      span: plan.span,
+      ceiling: plan.ceiling,
       arousal: this.layout.arousals[0],
       rng: this.rng,
     })
@@ -185,11 +217,11 @@ export class Composer {
   // Events that start before `until`, in time order. Call with an increasing `until`.
   pull(until: number): NoteEvent[] {
     const { duration } = this.layout
-    if (!this.finished && until + LOOKAHEAD >= duration) {
+    if (!this.finished && until + this.lookahead >= duration) {
       this.advance(duration - 4)
       this.finish()
     } else if (!this.finished) {
-      this.advance(until + LOOKAHEAD)
+      this.advance(until + this.lookahead)
     }
     // Everything before the clock has been decided. A ladder flip that is due but not yet
     // applied can still close a voice, so the clock never runs past one.
@@ -205,13 +237,19 @@ export class Composer {
     const out: NoteEvent[] = []
     for (const e of this.open.values()) this.emit(e, clock, until, out)
     for (const e of this.closed) this.emit(e, clock, until, out)
-    this.closed = this.closed.filter((e) => e.k >= 0)
+    this.closed = this.closed.filter((e) => e.chains.some((c) => c.k >= 0))
     out.sort((a, b) => a.time - b.time)
     return out
   }
 
   private begin(note: number, t: number) {
-    this.open.set(note, { id: this.nextId++, note, start: t, end: Infinity, at: t, k: 0 })
+    this.open.set(note, {
+      id: this.nextId++,
+      note,
+      start: t,
+      end: Infinity,
+      chains: this.links.map(() => ({ at: t, k: 0 })),
+    })
   }
 
   private finishNote(note: number, t: number) {
@@ -273,27 +311,30 @@ export class Composer {
   // be fixed once we know whether the voice outlives the next link, so emission waits
   // until the engine has run far enough to say.
   private emit(e: Entry, clock: number, until: number, out: NoteEvent[]) {
-    while (e.k >= 0 && e.at < until) {
-      const next = e.at + LINK * (0.85 + 0.3 * unit(this.linkSeed, e.id, e.k))
-      if (e.end !== Infinity && next > e.end - SETTLE) {
-        const remain = e.end - e.at
-        if (remain > MAX_LAST) {
-          // too long for one 8s sample: split the remainder in two overlapping links
-          const half = remain / 2
-          out.push({ time: e.at, note: e.note, hold: half + ATTACK })
-          e.at += half
-          e.k++
-          continue
+    e.chains.forEach((c, j) => {
+      const link = this.links[j]
+      while (c.k >= 0 && c.at < until) {
+        const next = c.at + link * (0.85 + 0.3 * unit(this.linkSeed + j * 7919, e.id, c.k))
+        if (e.end !== Infinity && next > e.end - this.settle) {
+          const remain = e.end - c.at
+          if (remain > this.maxLast) {
+            // too long for one sample: split the remainder in two overlapping links
+            const half = remain / 2
+            out.push({ time: c.at, note: e.note, hold: half + this.overlap, chain: j })
+            c.at += half
+            c.k++
+            continue
+          }
+          out.push({ time: c.at, note: e.note, hold: Math.max(0.5, remain), chain: j })
+          c.k = -1 // chain complete
+          return
         }
-        out.push({ time: e.at, note: e.note, hold: Math.max(0.5, remain) })
-        e.k = -1 // chain complete
-        return
+        if (e.end === Infinity && clock < next + this.settle) return // not decidable yet
+        out.push({ time: c.at, note: e.note, hold: next - c.at + this.overlap, chain: j })
+        c.at = next
+        c.k++
       }
-      if (e.end === Infinity && clock < next + SETTLE) return // not decidable yet
-      out.push({ time: e.at, note: e.note, hold: next - e.at + ATTACK })
-      e.at = next
-      e.k++
-    }
+    })
   }
 }
 
@@ -310,14 +351,13 @@ export function composeTimeline(plan: TimelinePlan): {
 }
 
 export function composeJourney(plan: JourneyPlan) {
+  const { from, to, holdA, shiftSeconds, holdB, ...rest } = plan
   return composeTimeline({
     waypoints: [
-      { rung: plan.from, hold: plan.holdA },
-      { rung: plan.to, hold: plan.holdB },
+      { rung: from, hold: holdA },
+      { rung: to, hold: holdB },
     ],
-    walk: plan.shiftSeconds,
-    tonic: plan.tonic,
-    beat: plan.beat,
-    rng: plan.rng,
+    walk: shiftSeconds,
+    ...rest,
   })
 }

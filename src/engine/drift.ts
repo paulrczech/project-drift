@@ -56,6 +56,9 @@ export interface DriftOptions {
   low?: number // lowest MIDI note any voice may reach (default: just under the tonic)
   high?: number // highest
   arousal?: number // 0 still … 1 energised (default 0.4); see setArousal
+  register?: number // semitones to shift the whole register (a high voice sits higher)
+  span?: number // semitones between the lowest and highest note a voice may reach
+  ceiling?: number // an absolute highest note (a voice that must not be pitched above its samples)
   rng?: () => number
 }
 
@@ -75,10 +78,10 @@ function pcsOf(rung: Rung, tonic: number): Set<number> {
 }
 
 // An open voicing built from the mode's own degrees: root, fifth, (ninth,) third.
-export function seedCluster(rung: Rung, tonic = DEFAULT_TONIC, voices = 4): Cluster {
+export function seedCluster(rung: Rung, tonic = DEFAULT_TONIC, voices = 4, register = 0): Cluster {
   const iv = SCALE_MAP[LADDER[rung]].intervals
   const degree = (n: number) => iv[n - 1] // 1-indexed scale degree in semitones
-  const root = rootNear(tonic)
+  const root = rootNear(tonic, 50 + register)
   const notes = [root, root + degree(5), root + 12 + degree(3)]
   if (voices >= 4) notes.push(root + 12 + degree(2))
   return sortCluster(notes)
@@ -111,6 +114,7 @@ export class DriftEngine {
   cluster: Cluster
   rung: Rung
   readonly tonic: number
+  readonly register: number
   readonly low: number
   readonly high: number
   arousal: number
@@ -123,11 +127,12 @@ export class DriftEngine {
   constructor(opts: DriftOptions) {
     this.rung = opts.rung
     this.tonic = opts.tonic ?? DEFAULT_TONIC
-    this.low = opts.low ?? rootNear(this.tonic) - 2
-    this.high = opts.high ?? this.low + WINDOW_SPAN
+    this.register = opts.register ?? 0
+    this.low = opts.low ?? this.root - 2
+    this.high = opts.high ?? Math.min(this.low + (opts.span ?? WINDOW_SPAN), opts.ceiling ?? Infinity)
     this.rng = opts.rng ?? Math.random
     this.arousal = clamp01(opts.arousal ?? 0.4)
-    this.cluster = seedCluster(opts.rung, this.tonic, voicesFor(this.arousal, 4))
+    this.cluster = seedCluster(opts.rung, this.tonic, voicesFor(this.arousal, 4), this.register)
     this.remember()
   }
 
@@ -144,7 +149,11 @@ export class DriftEngine {
   // The voices lean toward this mean pitch: deeper when still, brighter when energised.
   // Relative to the root, so every key plays the same shape of music.
   private get center(): number {
-    return rootNear(this.tonic) + lerp(6, 20, this.arousal)
+    return this.root + lerp(6, 20, this.arousal)
+  }
+
+  private get root(): number {
+    return rootNear(this.tonic, 50 + this.register)
   }
 
   private get modeThird(): number {
