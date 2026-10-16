@@ -7,6 +7,10 @@
   import { emotionProfiles } from './data/EmotionConfig'
 
   const hasSelected = ref(false)
+  // The audio outlives "End Drift" by its fade-out; `session` remounts it on restart
+  const audioActive = ref(false)
+  const session = ref(0)
+  let audioTeardown: number | undefined
   const isFadingOut = ref(false)
 
   const isDrifting = ref(false)
@@ -17,16 +21,23 @@
 
   // Selected visual/audio/text properties
   const defaultMessage = 'Welcome to Drift.'
-  const backgroundA = ref('')
-  const backgroundB = ref('')
+  const emotionA = ref('')
+  const emotionB = ref('')
   const snippetA = ref(defaultMessage)
   const snippetB = ref('')
   const samplesA = ref<string[]>([])
   const samplesB = ref<string[]>([])
 
-  const currentEmotion = ref<string>('')
+  // The audio Transport drives the cycle; text and visuals follow its fade events
+  const activeSide = ref<'A' | 'B'>('A')
+  const fadeSeconds = ref(0)
 
-  const crossfadeInterval = ref(4000)
+  const crossfadeInterval = ref(16000)
+
+  function handleFade(to: 'A' | 'B', seconds: number) {
+    fadeSeconds.value = seconds
+    activeSide.value = to
+  }
 
   function handleSubmit(selectedEmotions: string[]) {
     if (!selectedEmotions.length) return
@@ -34,25 +45,30 @@
     isFadingOut.value = true
     hasSelected.value = true
     isDrifting.value = true
+    clearTimeout(audioTeardown)
+    session.value++
+    audioActive.value = true
 
-    currentEmotion.value = selectedEmotions[0] ?? ''
+    // Keep the user's pick order so A is always the first emotion chosen
+    const selectedProfiles = selectedEmotions
+      .map((label) => emotionProfiles.find((profile) => profile.label === label))
+      .filter((profile) => profile !== undefined)
 
-    const selectedProfiles = emotionProfiles.filter((profile) =>
-      selectedEmotions.includes(profile.label)
-    )
+    activeSide.value = 'A'
+    fadeSeconds.value = (crossfadeInterval.value / 1000) * 0.3
 
-    backgroundA.value = selectedProfiles[0]?.background ?? ''
-    backgroundB.value = selectedProfiles[1]?.background ?? backgroundA.value
+    emotionA.value = selectedProfiles[0].label
+    emotionB.value = selectedProfiles[1]?.label ?? ''
 
-    snippetA.value = selectedProfiles[0]?.snippet ?? ''
-    snippetB.value = selectedProfiles[1]?.snippet ?? snippetA.value
+    snippetA.value = selectedProfiles[0].snippet
+    snippetB.value = selectedProfiles[1]?.snippet ?? ''
 
     if (selectedProfiles.length === 1) {
       samplesA.value = [selectedProfiles[0].samples[0]]
       samplesB.value = [selectedProfiles[0].samples[1]]
     } else {
-      samplesA.value = selectedProfiles[0]?.samples ?? []
-      samplesB.value = selectedProfiles[1]?.samples ?? []
+      samplesA.value = selectedProfiles[0].samples
+      samplesB.value = selectedProfiles[1].samples
     }
   }
 
@@ -62,22 +78,30 @@
     isDrifting.value = false
     isFadingOut.value = true
     hasSelected.value = false
+    // Unmount only after the 3s audio fade, or the player is disposed mid-fade
+    audioTeardown = window.setTimeout(() => (audioActive.value = false), 3100)
     snippetA.value = defaultMessage
     snippetB.value = ''
-    backgroundA.value = ''
-    backgroundB.value = ''
-    currentEmotion.value = ''
+    emotionA.value = ''
+    emotionB.value = ''
+    activeSide.value = 'A'
   }
 </script>
 
 <template>
-  <BreathingBackground :currentEmotion="currentEmotion" gradientType="radial" />
+  <BreathingBackground
+    :emotionA="emotionA"
+    :emotionB="emotionB"
+    :activeSide="activeSide"
+    :fadeSeconds="fadeSeconds"
+    gradientType="radial" />
 
   <div class="app-container">
     <EmotionalSnippet
       :snippetA="snippetA"
       :snippetB="snippetB"
-      :crossfadeInterval="crossfadeInterval" />
+      :activeSide="activeSide"
+      :fadeSeconds="fadeSeconds" />
 
     <div class="emotion-bar">
       <EmotionSelector
@@ -86,12 +110,13 @@
         @end:drift="stopDrift" />
 
       <AudioPlayer
-        v-if="hasSelected"
+        v-if="audioActive"
+        :key="session"
         ref="audioPlayerRef"
         :samplesA="samplesA"
         :samplesB="samplesB"
         :crossfadeInterval="crossfadeInterval"
-        :playerOffset="2" />
+        @fade="handleFade" />
     </div>
   </div>
 </template>

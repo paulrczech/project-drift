@@ -1,27 +1,18 @@
 <script setup lang="ts">
-  import { ref, watch, computed } from 'vue'
+  import { computed, ref, watch } from 'vue'
   import { emotionPalettes } from '../data/EmotionGradient'
 
   interface Props {
-    currentEmotion: string
+    emotionA: string
+    emotionB: string
+    activeSide: 'A' | 'B'
+    fadeSeconds: number
     gradientType?: 'random' | 'linear' | 'radial' | 'conic'
   }
 
   const props = defineProps<Props>()
 
   const defaultColors = ['#5C6D7A', '#E8D7F1']
-
-  const currentBackground = ref('')
-  const previousBackground = ref('')
-  const fadingOut = ref(false)
-
-  const effectiveEmotion = computed(() => {
-    return props.currentEmotion || 'default'
-  })
-
-  const breathingDuration = computed(() => {
-    return effectiveEmotion.value === 'default' ? '8s' : '8s'
-  })
 
   function getGradient(
     colors: string[],
@@ -48,57 +39,51 @@
     }
   }
 
+  function gradientFor(emotion: string): string {
+    const colors = emotionPalettes[emotion.toLowerCase()] ?? ['#ccc', '#eee']
+    return getGradient(colors, props.gradientType ?? 'random')
+  }
+
+  // The resting gradient sits underneath; A and B fade in over it.
+  const idleGradient = getGradient(defaultColors, props.gradientType ?? 'random')
+  // Layers always exist and keep their last gradient, so they can fade out
+  // after the emotion is cleared instead of vanishing.
+  const gradientA = ref('')
+  const gradientB = ref('')
   watch(
-    () => props.currentEmotion,
-    (newEmotion) => {
-      const isDefault = !newEmotion || newEmotion === 'default'
-
-      const colors = isDefault
-        ? defaultColors
-        : emotionPalettes[newEmotion.toLowerCase()] ?? ['#ccc', '#eee']
-
-      const newGradient = getGradient(colors, props.gradientType ?? 'random')
-
-      if (isDefault) {
-        previousBackground.value = newGradient
-        currentBackground.value = newGradient
-        fadingOut.value = false
-      } else {
-        previousBackground.value = currentBackground.value
-        currentBackground.value = newGradient
-        fadingOut.value = true
-        setTimeout(() => {
-          fadingOut.value = false
-        }, 1000)
-      }
+    () => props.emotionA,
+    (emotion) => {
+      if (emotion) gradientA.value = gradientFor(emotion)
+    },
+    { immediate: true }
+  )
+  watch(
+    () => props.emotionB,
+    (emotion) => {
+      if (emotion) gradientB.value = gradientFor(emotion)
     },
     { immediate: true }
   )
 
-  // Set initial background manually at startup
-  if (!props.currentEmotion) {
-    const colors = defaultColors
-    currentBackground.value = getGradient(
-      colors,
-      props.gradientType ?? 'random'
-    )
-  }
+  // With a single emotion there is no B, so A stays put
+  const aOn = computed(() => !!props.emotionA && (!props.emotionB || props.activeSide === 'A'))
+  const bOn = computed(() => !!props.emotionB && props.activeSide === 'B')
 </script>
 
 <template>
+  <div class="background-layer">
+    <div class="breathing-background" :style="{ background: idleGradient }"></div>
+  </div>
   <div
     class="background-layer"
-    :style="{
-      background: currentBackground,
-      opacity: fadingOut ? 0 : 1,
-      animationDuration: breathingDuration,
-    }"></div>
+    :style="{ opacity: aOn ? 1 : 0, transitionDuration: props.fadeSeconds + 's' }">
+    <div class="breathing-background" :style="{ background: gradientA }"></div>
+  </div>
   <div
-    class="background-layer breathing-background"
-    :style="{
-      background: currentBackground,
-      opacity: fadingOut ? 0 : 1,
-    }"></div>
+    class="background-layer"
+    :style="{ opacity: bOn ? 1 : 0, transitionDuration: props.fadeSeconds + 's' }">
+    <div class="breathing-background" :style="{ background: gradientB }"></div>
+  </div>
 </template>
 
 <style scoped>
@@ -110,10 +95,19 @@
     height: 100vh;
     z-index: -2;
     transition: opacity 1s ease-in-out;
-    background-size: 200% 200%;
   }
 
+  /* The wrapper fades between A and B; the inner layer breathes, since the
+     keyframes animate opacity and would override the wrapper's.
+     Only transform and opacity are animated, so Chrome can run it on the
+     compositor. Animating background-position repainted three oversized
+     gradients every frame and left unrasterized tiles flashing on screen. */
   .breathing-background {
+    position: absolute;
+    inset: 0;
+    background-size: 200% 200%;
+    background-position: 50% 50%;
+    will-change: transform, opacity;
     animation: breathe 12s ease-in-out infinite;
   }
 
@@ -121,27 +115,22 @@
     0% {
       transform: scale(1) translate(0, 0);
       opacity: 1;
-      background-position: 50% 50%;
     }
     25% {
-      transform: scale(2) translate(1px, 1px);
+      transform: scale(2) translate(-2%, -2%);
       opacity: 0.95;
-      background-position: 75% 75%;
     }
     50% {
-      transform: scale(4) translate(2px, 2px);
+      transform: scale(4) translate(-4%, -4%);
       opacity: 0.9;
-      background-position: 90% 90%;
     }
     75% {
-      transform: scale(2) translate(1px, 1px);
+      transform: scale(2) translate(-2%, -2%);
       opacity: 0.95;
-      background-position: 75% 75%;
     }
     100% {
       transform: scale(1) translate(0, 0);
       opacity: 1;
-      background-position: 50% 50%;
     }
   }
 </style>

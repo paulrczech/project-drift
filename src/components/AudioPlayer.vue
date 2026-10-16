@@ -10,6 +10,12 @@
 
   const props = defineProps<Props>()
 
+  // The Transport is the shared clock: each fade start is announced here so
+  // text and visuals follow the audio instead of running their own timers.
+  const emit = defineEmits<{
+    (e: 'fade', to: 'A' | 'B', seconds: number): void
+  }>()
+
   defineExpose({
     stopDrift,
   })
@@ -26,17 +32,29 @@
   let delay: Tone.FeedbackDelay
   let gainNode: Tone.Gain
   let loop: Tone.Loop
+  let side: 'A' | 'B' = 'A'
 
-  async function stopDrift() {
-    const now = Tone.now()
+  // Set once End is clicked or the component unmounts, so a drift that is
+  // still loading never starts afterwards.
+  let halted = false
+  let stopTimer: number | undefined
+
+  function stopDrift() {
+    halted = true
+    if (!gainNode) return // still loading: nothing audible to fade
+
+    // Stop the cycle so no further fade events reach text and visuals
+    loop?.stop()
+    Tone.getDraw().cancel(0)
 
     // Smooth fade out
+    const now = Tone.now()
     gainNode.gain.cancelScheduledValues(now)
-    gainNode.gain.setValueAtTime(gainNode.gain.value, now) // Start from current
+    gainNode.gain.setValueAtTime(Math.max(0, gainNode.gain.value), now) // Start from current (clamped: mid-ramp reads can dip a hair below 0)
     gainNode.gain.linearRampToValueAtTime(0, now + 3) // Fade to silence in 3 seconds
 
     // Stop after fade completes
-    setTimeout(() => {
+    stopTimer = window.setTimeout(() => {
       Tone.Transport.stop()
       playerA.stop()
       playerB.stop()
@@ -45,6 +63,7 @@
 
   onMounted(async () => {
     await Tone.start()
+    if (halted) return
 
     // Pick random samples (or fallback to same)
     const sampleA =
@@ -60,6 +79,7 @@
     playerB.loop = true
 
     await Tone.loaded()
+    if (halted) return
 
     // Crossfade node between two players
     crossFade = new Tone.CrossFade(0)
@@ -93,21 +113,25 @@
 
     // Schedule repeating crossfade with precise timing
     loop = new Tone.Loop((time) => {
-      const current = crossFade.fade.value
-      const next = current < 0.5 ? 1 : 0
-      crossFade.fade.setValueAtTime(current, time)
-      crossFade.fade.rampTo(next, fadeDur, time + soloDur)
+      const to = side === 'A' ? 'B' : 'A'
+      side = to
+      const fadeStart = time + soloDur
+      crossFade.fade.rampTo(to === 'A' ? 0 : 1, fadeDur, fadeStart)
+      Tone.getDraw().schedule(() => emit('fade', to, fadeDur), fadeStart)
     }, period).start(0)
   })
 
   onUnmounted(() => {
-    loop.dispose()
-    playerA.dispose()
-    playerB.dispose()
-    crossFade.dispose()
-    reverb.dispose()
-    delay.dispose()
-    gainNode.dispose()
+    halted = true
+    clearTimeout(stopTimer)
+    Tone.getDraw().cancel(0)
+    loop?.dispose()
+    playerA?.dispose()
+    playerB?.dispose()
+    crossFade?.dispose()
+    reverb?.dispose()
+    delay?.dispose()
+    gainNode?.dispose()
     Tone.Transport.stop()
   })
 </script>

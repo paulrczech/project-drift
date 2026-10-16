@@ -1,42 +1,24 @@
 <script setup lang="ts">
-  import { ref, onMounted, onUnmounted } from 'vue'
-
   interface Props {
     snippetA: string
     snippetB: string
-    crossfadeInterval: number
+    activeSide: 'A' | 'B'
+    fadeSeconds: number
   }
 
   const props = defineProps<Props>()
 
-  const activeSnippet = ref<'A' | 'B'>('A')
-  let intervalId: number | undefined
-
-  onMounted(() => {
-    intervalId = window.setInterval(() => {
-      activeSnippet.value = activeSnippet.value === 'A' ? 'B' : 'A'
-    }, props.crossfadeInterval)
-  })
-
-  onUnmounted(() => {
-    if (intervalId) {
-      clearInterval(intervalId)
-    }
-  })
+  // With a single emotion there is no B line, so A stays put
+  const isActive = (side: 'A' | 'B') =>
+    side === 'A' ? !props.snippetB || props.activeSide === 'A' : props.activeSide === 'B'
 </script>
 
 <template>
-  <div class="snippet-container">
-    <p
-      class="snippet-text"
-      :class="{ active: activeSnippet === 'A' }"
-      v-if="props.snippetA">
+  <div class="snippet-container" :style="{ '--fade': props.fadeSeconds + 's' }">
+    <p class="snippet-text" :class="{ active: isActive('A') }" v-if="props.snippetA">
       {{ props.snippetA }}
     </p>
-    <p
-      class="snippet-text"
-      :class="{ active: activeSnippet === 'B' }"
-      v-if="props.snippetB">
+    <p class="snippet-text" :class="{ active: isActive('B') }" v-if="props.snippetB">
       {{ props.snippetB }}
     </p>
   </div>
@@ -65,7 +47,7 @@
     color: rgba(255, 255, 255, 0.9);
     text-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
     opacity: 0;
-    transition: opacity 4s ease-in-out;
+    transition: opacity var(--fade, 4s) ease-in-out;
   }
 
   /* Active snippet fades in */
