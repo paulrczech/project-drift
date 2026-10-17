@@ -4,6 +4,7 @@
   import MoodField from './MoodField.vue'
   import JourneyRing from './JourneyRing.vue'
   import WordsFallback from './WordsFallback.vue'
+  import SoundPicker from './SoundPicker.vue'
   import {
     describe,
     paletteAt,
@@ -14,7 +15,16 @@
   import { rungFor } from '../engine/moods'
   import { layoutTimeline, type TimelinePlan } from '../engine/compose'
 
-  import { preloadVoice, voiceFromLocation } from '../engine/voices'
+  import {
+    VOICES,
+    currentTempoFeel,
+    currentVoiceId,
+    preloadVoice,
+    rememberTempoFeel,
+    rememberVoice,
+    voiceFromLocation,
+    type TempoFeelName,
+  } from '../engine/voices'
 
   // Tone.js is large and only needed once a drift starts, so the player loads on demand —
   // and, with the samples, is fetched ahead of time as soon as someone chooses a first stop.
@@ -23,6 +33,23 @@
   function warmUp() {
     loadPlayer()
     preloadVoice(voiceFromLocation())
+  }
+
+  // The sound: remembered between visits, applied to the next drift.
+  const voiceId = ref(currentVoiceId())
+  function chooseVoice(id: string) {
+    voiceId.value = id
+    rememberVoice(id)
+    preloadVoice(VOICES[id])
+    say(`Sound: ${VOICES[id].label}.`)
+  }
+
+  // slow / medium / fast, for the pulse: scales its tempo, which still follows the mood
+  const tempoFeel = ref<TempoFeelName>(currentTempoFeel())
+  function chooseTempo(feel: TempoFeelName) {
+    tempoFeel.value = feel
+    rememberTempoFeel(feel)
+    say(`Tempo: ${feel}.`)
   }
 
   // ── state ───────────────────────────────────────────────────────────────────────────
@@ -44,6 +71,7 @@
   const session = ref(0)
   let audioTeardown: number | undefined
   const playerRef = ref<{ stopDrift: () => void } | null>(null)
+  const fieldRef = ref<{ focus: () => void } | null>(null)
 
   const announcement = ref('')
   const say = (text: string) => (announcement.value = text)
@@ -90,11 +118,13 @@
     say(`Removed ${wordFor(gone)}.`)
   }
 
+  // Start a new journey without taking the old stops away one at a time.
   function clear() {
-    if (drifting.value) return
+    if (drifting.value || !points.value.length) return
     reset()
     points.value = []
-    say('Cleared.')
+    say('Cleared. Touch where you are.')
+    fieldRef.value?.focus() // the button is about to go quiet; keep the keyboard somewhere useful
   }
 
   // the word lists: set a stop, add the next, or take one away
@@ -217,6 +247,7 @@
     </div>
 
     <MoodField
+      ref="fieldRef"
       :points="points"
       :travel="drifting ? position : null"
       :drifting="drifting"
@@ -228,6 +259,13 @@
     <p class="hint" :style="vars(topInk)" aria-hidden="true">{{ hint }}</p>
 
     <div :style="vars(bottomInk)">
+      <button
+        class="side left"
+        type="button"
+        :disabled="drifting || !points.length"
+        @click="clear">
+        clear
+      </button>
       <JourneyRing
         v-model="minutes"
         :drifting="drifting"
@@ -235,6 +273,13 @@
         :progress="progress"
         @begin="begin"
         @stop="stop" />
+      <SoundPicker
+        class="side right"
+        :model-value="voiceId"
+        :tempo="tempoFeel"
+        :disabled="drifting"
+        @update:model-value="chooseVoice"
+        @update:tempo="chooseTempo" />
     </div>
 
     <GenerativePlayer
@@ -282,6 +327,49 @@
     opacity: 0.8;
     pointer-events: none;
     z-index: 1;
+  }
+
+  /* the two controls either side of the ring, level with its centre */
+  .field-app .side {
+    position: fixed;
+    bottom: calc(80px + env(safe-area-inset-bottom, 0px));
+    z-index: 4;
+  }
+  .field-app .side.left {
+    all: unset;
+    box-sizing: border-box;
+    position: fixed;
+    bottom: calc(80px + env(safe-area-inset-bottom, 0px));
+    right: calc(50% + 100px);
+    z-index: 4;
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    font-size: 0.8rem;
+    letter-spacing: 0.1em;
+    color: var(--ink);
+    opacity: 0.75;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .field-app .side.left:hover:not(:disabled) {
+    opacity: 1;
+  }
+  .field-app .side.left:disabled {
+    opacity: 0.3;
+    cursor: default;
+  }
+  .field-app .side.left:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: -4px;
+    border-radius: 6px;
+    opacity: 1;
+  }
+  .field-app .side.right {
+    left: calc(50% + 100px);
   }
 
   .field-app .sr-only {

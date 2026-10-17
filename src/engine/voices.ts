@@ -6,7 +6,7 @@
 // Each layer answers for a range of notes. A note is sent to every layer whose range holds
 // it, softer near the edges of the range, so the sections blend as the voices move.
 //
-// The orchestra is the default. `?voice=pad|choir|choir-mixed|orchestra` picks another — no picker yet.
+// The pad is the default; the sound selector (and `?voice=pad|choir|choir-mixed|orchestra|pulse`) picks another.
 
 export interface Layer {
   id: string
@@ -25,6 +25,13 @@ export interface Layer {
 
 export interface Voice {
   id: string
+  label: string // the name shown in the sound selector
+  megabytes: number // download size, shown dimly for the heavy ones
+  listed?: boolean // appears in the selector (the others stay available by URL)
+  style?: 'pulse' // played as a steady ostinato (see pulse.ts) instead of free-time swells
+  // A tempo-synced echo after the voice: the delay is `beats` of a beat long (0.75 = dotted
+  // eighth), so it follows the pulse as the tempo moves with arousal.
+  echo?: { beats: number; feedback: number; wet: number }
   layers: Layer[]
   register: number // semitones to lift the engine's register
   span: number // semitones between the lowest and highest note any voice may reach
@@ -64,6 +71,9 @@ const single = (id: string, baseUrl: string, urls: Record<string, string>): Laye
 // every major third; the sampler transposes between them. 8s samples.
 const pad: Voice = {
   id: 'pad',
+  label: 'pad',
+  megabytes: 1.9,
+  listed: true,
   layers: [
     single('retro-pad', '/samples/retro-pad/', {
       E2: 'E2.mp3', 'G#2': 'Gs2.mp3', C3: 'C3.mp3', E3: 'E3.mp3', 'G#3': 'Gs3.mp3', C4: 'C4.mp3',
@@ -92,6 +102,8 @@ const MALE = everyNote('G2', 'F#4')
 // from G4 — a few semitones on average, so it grows warmer and more alto-like below.
 const choir: Voice = {
   id: 'choir',
+  label: 'choir',
+  megabytes: 3.1,
   layers: [single('choir-female', '/samples/choir-female/', urlsFor(FEMALE))],
   register: 12,
   span: 20,
@@ -109,6 +121,9 @@ const choir: Voice = {
 // all (G2–C6, a sample for every semitone), capped at G5.
 const choirMixed: Voice = {
   id: 'choir-mixed',
+  label: 'voices',
+  megabytes: 7.2,
+  listed: true,
   layers: [
     single('choir', '/samples/', {
       ...urlsFor(MALE, 'choir-male/'),
@@ -134,6 +149,9 @@ const choirMixed: Voice = {
 // The sections are only 3–6s long (looped to 6s), so notes are struck anew every ~2.6s.
 const orchestra: Voice = {
   id: 'orchestra',
+  label: 'orchestra',
+  megabytes: 17.8,
+  listed: true,
   layers: [
     // basses, an octave below the voices that sit low, for weight
     { id: 'basses', chain: 0, baseUrl: '/samples/orchestra/basses/', min: 40, max: 55, gain: 0.406, fade: 4, byArousal: [-2, 0, 1.5], transpose: -12,
@@ -175,21 +193,99 @@ const orchestra: Voice = {
   credit: `Orchestral pad — ${SSO_CREDIT}`,
 }
 
-export const VOICES: Record<string, Voice> = { pad, choir, 'choir-mixed': choirMixed, orchestra }
+// Eddy's analog synth: Moog Minitaur "Simple Saw" by modularsamples — CC0 (public domain). One
+// short note (1.9s, 11 ms attack) for every semitone, E2-C5. (Eddy's files above C5 are all
+// copies of C5 — measured — so only E2-C5 are used; the sampler transposes the rare note above.)
+// Played as an ostinato: it begins on one repeating note and the chord's notes join over the
+// journey, with a dotted-eighth echo that follows the tempo and a soft low-pass for the saw.
+const synth: Voice = {
+  id: 'pulse',
+  label: 'pulse',
+  megabytes: 1.5,
+  listed: true,
+  style: 'pulse',
+  layers: [single('analog-synth', '/samples/analog-synth/', urlsFor(everyNote('E2', 'C5')))],
+  register: 10,
+  span: 26,
+  ceiling: 79,
+  lowpass: 6000,
+  level: 1.05, // a short plucked note is quiet by RMS: set by measurement, a little under the pad
+  attack: 0.005,
+  release: 0.35,
+  link: 1, // (unused: the pulse re-strikes every step)
+  maxHold: 1,
+  echo: { beats: 0.75, feedback: 0.42, wet: 0.3 },
+  credit: 'Analog synth — Moog Minitaur "Simple Saw" by modularsamples (freesound.org/people/modularsamples), CC0',
+}
 
-export const DEFAULT_VOICE = 'orchestra'
+export const VOICES: Record<string, Voice> = { pad, choir, 'choir-mixed': choirMixed, orchestra, pulse: synth }
+
+export const DEFAULT_VOICE = 'pad' // the lightest, so a first visit is instant
+export const LISTED_VOICES = Object.values(VOICES).filter((v) => v.listed)
+
+const STORAGE_KEY = 'drift.voice'
+
+function storedVoiceId(): string | null {
+  try {
+    return window.localStorage.getItem(STORAGE_KEY)
+  } catch {
+    return null // private windows and blocked storage: just use the default
+  }
+}
+
+// `?voice=` wins (handy for trying one), then what the listener last chose, then the default.
+export function currentVoiceId(): string {
+  const fromUrl = new URLSearchParams(window.location.search).get('voice')
+  for (const id of [fromUrl, storedVoiceId()]) if (id && VOICES[id]) return id
+  return DEFAULT_VOICE
+}
 
 export function voiceFromLocation(): Voice {
-  const id = new URLSearchParams(window.location.search).get('voice') ?? DEFAULT_VOICE
-  return VOICES[id] ?? VOICES[DEFAULT_VOICE]
+  return VOICES[currentVoiceId()]
+}
+
+// Remember a choice. A `?voice=` in the address would still override it, so it is dropped.
+export function rememberVoice(id: string) {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, id)
+  } catch {
+    /* not remembered; the choice still applies to this visit */
+  }
+  const url = new URL(window.location.href)
+  if (url.searchParams.has('voice')) {
+    url.searchParams.delete('voice')
+    window.history.replaceState(null, '', url)
+  }
+}
+
+const TEMPO_KEY = 'drift.tempo'
+export type TempoFeelName = 'slow' | 'medium' | 'fast'
+
+export function currentTempoFeel(): TempoFeelName {
+  try {
+    const t = window.localStorage.getItem(TEMPO_KEY)
+    if (t === 'slow' || t === 'medium' || t === 'fast') return t
+  } catch {
+    /* default */
+  }
+  return 'medium'
+}
+
+export function rememberTempoFeel(feel: TempoFeelName) {
+  try {
+    window.localStorage.setItem(TEMPO_KEY, feel)
+  } catch {
+    /* applies to this visit only */
+  }
 }
 
 // Start fetching a voice's samples into the browser's cache before a drift begins, so Begin
-// is not a silent wait. Called once, when someone first shows intent (chooses a stop).
-let preloaded = false
+// is not a silent wait. Called when someone first shows intent (chooses a stop) and when they
+// pick a sound; each voice is fetched once.
+const preloaded = new Set<string>()
 export function preloadVoice(voice: Voice) {
-  if (preloaded) return
-  preloaded = true
+  if (preloaded.has(voice.id)) return
+  preloaded.add(voice.id)
   for (const layer of voice.layers)
     for (const file of Object.values(layer.urls))
       fetch(layer.baseUrl + file, { priority: 'low' } as RequestInit).catch(() => {})

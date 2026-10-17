@@ -133,6 +133,12 @@
     else emit('choose', { v: e.v, a: e.a })
   }
 
+  // Put the keyboard back in the field (after "clear", say): on the dot that is in the tab order.
+  function focus() {
+    dotRefs.get(focusLabel.value)?.focus()
+  }
+  defineExpose({ focus })
+
   const KEYS: Record<string, 'left' | 'right' | 'up' | 'down'> = {
     ArrowLeft: 'left',
     ArrowRight: 'right',

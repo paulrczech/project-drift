@@ -1,0 +1,265 @@
+<script setup lang="ts">
+  import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+  import { LISTED_VOICES, VOICES, type TempoFeelName } from '../engine/voices'
+
+  // "sound": a quiet word beside the ring that opens a short list of voices. Choosing one
+  // applies to the next drift (the stops are the same: this only changes what plays them).
+
+  const props = defineProps<{
+    modelValue: string // the chosen voice's id
+    tempo: TempoFeelName // slow / medium / fast, for the pulse
+    disabled: boolean
+  }>()
+
+  const emit = defineEmits<{
+    (e: 'update:modelValue', id: string): void
+    (e: 'update:tempo', feel: TempoFeelName): void
+  }>()
+
+  const FEELS: TempoFeelName[] = ['slow', 'medium', 'fast']
+  const isPulse = () => VOICES[props.modelValue]?.style === 'pulse'
+  const feelRefs = ref<HTMLElement[]>([])
+
+  const open = ref(false)
+  const root = ref<HTMLElement | null>(null)
+  const toggle = ref<HTMLElement | null>(null)
+  const items = ref<HTMLElement[]>([])
+
+  const size = (mb: number) => (mb >= 5 ? `${Math.round(mb)} MB` : '')
+
+  async function show() {
+    if (props.disabled) return
+    open.value = true
+    await nextTick()
+    // focus lands on the current choice, so a keyboard user hears where they are
+    const at = Math.max(0, LISTED_VOICES.findIndex((v) => v.id === props.modelValue))
+    items.value[at]?.focus()
+  }
+
+  function hide(returnFocus = true) {
+    open.value = false
+    if (returnFocus) toggle.value?.focus()
+  }
+
+  function choose(id: string) {
+    emit('update:modelValue', id)
+    hide()
+  }
+
+  async function onKey(ev: KeyboardEvent, i: number) {
+    if (ev.key === 'Escape') {
+      ev.preventDefault()
+      hide()
+      return
+    }
+    const step = ev.key === 'ArrowDown' || ev.key === 'ArrowRight' ? 1 : ev.key === 'ArrowUp' || ev.key === 'ArrowLeft' ? -1 : 0
+    if (!step) return
+    ev.preventDefault()
+    items.value[(i + step + LISTED_VOICES.length) % LISTED_VOICES.length]?.focus()
+  }
+
+  // the tempo chips: arrows move and choose, as in any radio group
+  async function onFeelKey(ev: KeyboardEvent, i: number) {
+    if (ev.key === 'Escape') {
+      ev.preventDefault()
+      hide()
+      return
+    }
+    const step = ev.key === 'ArrowRight' || ev.key === 'ArrowDown' ? 1 : ev.key === 'ArrowLeft' || ev.key === 'ArrowUp' ? -1 : 0
+    if (!step) return
+    ev.preventDefault()
+    const next = (i + step + FEELS.length) % FEELS.length
+    emit('update:tempo', FEELS[next])
+    await nextTick()
+    feelRefs.value[next]?.focus()
+  }
+
+  // a tap or click anywhere else closes it
+  function outside(ev: PointerEvent) {
+    if (open.value && root.value && !root.value.contains(ev.target as Node)) hide(false)
+  }
+  onMounted(() => document.addEventListener('pointerdown', outside))
+  onBeforeUnmount(() => document.removeEventListener('pointerdown', outside))
+</script>
+
+<template>
+  <div ref="root" class="sound">
+    <button
+      ref="toggle"
+      class="toggle"
+      type="button"
+      aria-haspopup="true"
+      :aria-expanded="open"
+      aria-controls="sound-list"
+      :disabled="disabled"
+      @click="open ? hide(false) : show()">
+      sound
+    </button>
+
+    <div v-show="open" id="sound-list" class="list">
+      <div class="voices" role="radiogroup" aria-label="Sound">
+      <button
+        v-for="(v, i) in LISTED_VOICES"
+        :key="v.id"
+        :ref="(el) => el && (items[i] = el as HTMLElement)"
+        class="option"
+        :class="{ on: v.id === modelValue }"
+        role="radio"
+        :aria-checked="v.id === modelValue"
+        :aria-label="size(v.megabytes) ? `${v.label}, ${size(v.megabytes)} download` : v.label"
+        :tabindex="v.id === modelValue ? 0 : -1"
+        type="button"
+        @click="choose(v.id)"
+        @keydown="onKey($event, i)">
+        <span class="mark" aria-hidden="true"></span>
+        <span class="name">{{ v.label }}</span>
+        <span v-if="size(v.megabytes)" class="mb">{{ size(v.megabytes) }}</span>
+      </button>
+      </div>
+      <div v-if="isPulse()" class="tempo" role="radiogroup" aria-label="Tempo">
+        <span class="tempo-label" aria-hidden="true">tempo</span>
+        <button
+          v-for="(f, i) in FEELS"
+          :key="f"
+          :ref="(el) => el && (feelRefs[i] = el as HTMLElement)"
+          class="chip"
+          :class="{ on: f === tempo }"
+          role="radio"
+          :aria-checked="f === tempo"
+          :tabindex="f === tempo ? 0 : -1"
+          type="button"
+          @click="emit('update:tempo', f)"
+          @keydown="onFeelKey($event, i)">
+          {{ f }}
+        </button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+  .sound {
+    position: relative;
+    color: var(--ink);
+  }
+
+  button {
+    all: unset;
+    box-sizing: border-box;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button:disabled {
+    cursor: default;
+    opacity: 0.35;
+  }
+
+  .toggle {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0 10px;
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.8rem;
+    letter-spacing: 0.1em;
+    opacity: 0.75;
+  }
+  .toggle:hover:not(:disabled),
+  .toggle[aria-expanded='true'] {
+    opacity: 1;
+  }
+  .toggle:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: -4px;
+    border-radius: 6px;
+    opacity: 1;
+  }
+
+  .list {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 6px);
+    display: grid;
+    min-width: 168px;
+    max-width: calc(100vw - 24px);
+    padding: 6px;
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--ink-contrast) 90%, transparent);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+
+  .voices {
+    display: grid;
+  }
+
+  .option {
+    min-height: 44px;
+    padding: 0 12px;
+    display: grid;
+    grid-template-columns: 14px 1fr auto;
+    align-items: center;
+    gap: 10px;
+    border-radius: 10px;
+    font-size: 0.85rem;
+    letter-spacing: 0.06em;
+  }
+  .option:hover {
+    background: color-mix(in srgb, var(--ink) 12%, transparent);
+  }
+  .option:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: -2px;
+  }
+
+  .name {
+    text-align: left;
+  }
+
+  .tempo {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 4px;
+    padding: 6px 6px 2px;
+    border-top: 1px solid color-mix(in srgb, var(--ink) 25%, transparent);
+  }
+  .tempo-label {
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    margin-right: 4px;
+  }
+  .chip {
+    min-height: 44px;
+    padding: 0 10px;
+    display: inline-flex;
+    align-items: center;
+    border-radius: 10px;
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
+    border: 1.5px solid color-mix(in srgb, var(--ink) 40%, transparent);
+  }
+  .chip.on {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: var(--ink-contrast);
+  }
+  .chip:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
+  }
+
+  .mark {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 1.5px solid var(--ink);
+  }
+  .option.on .mark {
+    background: var(--ink);
+  }
+  /* dim by size, not by transparency: faded text fails contrast */
+  .mb {
+    font-size: 0.68rem;
+  }
+</style>
