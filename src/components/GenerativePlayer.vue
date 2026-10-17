@@ -67,7 +67,7 @@
       const at = t0 + e.time
       const late = Math.max(0, now - at) // after a stall, join the note already in progress
       if (late >= e.hold) continue
-      for (const r of routeNote(voice, e.note)) {
+      for (const r of routeNote(voice, e.note, arousalAt(layout, e.time))) {
         if ((r.layer.chain ?? 0) !== e.chain) continue // each layer re-strikes on its own schedule
         samplers
           .get(r.layer.id)

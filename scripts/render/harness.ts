@@ -16,7 +16,7 @@ function wav16(buf: Tone.ToneAudioBuffer, gain: number): string {
   return btoa(bin)
 }
 
-async function render(events: NoteEvent[], seconds: number, wet: number, voice0: Voice, wetAt?: (t: number) => number, only?: string[]) {
+async function render(events: NoteEvent[], seconds: number, wet: number, voice0: Voice, wetAt?: (t: number) => number, only?: string[], arousalOf?: (t: number) => number) {
   const voice = only ? { ...voice0, layers: voice0.layers.filter(l => only.includes(l.id)) } : voice0
   const buffers = new Map(voice.layers.map(l => [l.id, new Tone.ToneAudioBuffers({ urls: l.urls, baseUrl: '/public' + l.baseUrl })]))
   await Tone.loaded()
@@ -29,7 +29,9 @@ async function render(events: NoteEvent[], seconds: number, wet: number, voice0:
     const samplers = new Map(voice.layers.map(l => [l.id, new Tone.Sampler({
       urls: Object.fromEntries(Object.keys(l.urls).map(k => [k, buffers.get(l.id)!.get(k)])), attack: voice.attack, release: voice.release, curve: voice.curve ?? 'exponential',
     }).connect(filter ?? reverb)]))
-    for (const e of events) for (const r of routeNote(voice, e.note)) if ((r.layer.chain ?? 0) === e.chain)
+    // route through the FULL voice (the loudness normalisation depends on every layer), then
+    // let only the chosen layers' samplers sound
+    for (const e of events) for (const r of routeNote(voice0, e.note, arousalOf ? arousalOf(e.time) : 0.5)) if ((r.layer.chain ?? 0) === e.chain && samplers.has(r.layer.id))
       samplers.get(r.layer.id)!.triggerAttackRelease(Tone.Frequency(r.note, 'midi').toNote(), e.hold, e.time, 0.8 * r.velocity)
   }, seconds + voice.release + 6, 2)
   const L = buf.getChannelData(0); let peak = 0; for (let i = 0; i < L.length; i++) peak = Math.max(peak, Math.abs(L[i]))
@@ -55,6 +57,6 @@ async function render(events: NoteEvent[], seconds: number, wet: number, voice0:
   if ((plan as any).override?.syncChains) voice = { ...voice, layers: voice.layers.map(l => ({ ...l, chain: 0 })), links: [voice.link] }
   const c = composeTimeline({ ...plan, ...params(voice) })
   const lay = layoutTimeline(plan.waypoints, plan.walk)
-  return { ...(await render(c.events, c.duration, wet, voice, (t) => 0.45 - 0.2 * arousalAt(lay, t), (plan as any).only)), marks: c.marks, events: c.events.length }
+  return { ...(await render(c.events, c.duration, wet, voice, (t) => 0.45 - 0.2 * arousalAt(lay, t), (plan as any).only, (t) => arousalAt(lay, t))), marks: c.marks, events: c.events.length }
 }
 ;(window as any).renderNote = async (note: number, wet = 0, voiceId = 'pad') => render([{ time: 0, note, hold: 5 }], 5, wet, VOICES[voiceId])

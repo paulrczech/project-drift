@@ -18,6 +18,9 @@ export interface Layer {
   transpose?: number // semitones: basses double an octave below, for weight
   fade?: number // semitones over which the layer fades in at each edge of its range
   chain?: number // which re-strike schedule (see Voice.links) this layer follows (default 0)
+  // How forward this layer is as the mood moves, in dB at arousal 0.1 / 0.5 / 0.9 (straight
+  // lines between and flat beyond). 0 at the middle keeps the balance the mix was set at.
+  byArousal?: [number, number, number]
 }
 
 export interface Voice {
@@ -133,30 +136,30 @@ const orchestra: Voice = {
   id: 'orchestra',
   layers: [
     // basses, an octave below the voices that sit low, for weight
-    { id: 'basses', chain: 0, baseUrl: '/samples/orchestra/basses/', min: 40, max: 55, gain: 0.70, fade: 4, transpose: -12,
+    { id: 'basses', chain: 0, baseUrl: '/samples/orchestra/basses/', min: 40, max: 55, gain: 0.406, fade: 4, byArousal: [-2, 0, 1.5], transpose: -12,
       urls: urlsFor(['C1', 'D#1', 'F#1', 'A1', 'C2', 'D#2', 'F#2', 'A2', 'C3', 'D#3', 'F#3', 'A3', 'C4']) },
-    { id: 'celli', chain: 1, baseUrl: '/samples/orchestra/celli/', min: 40, max: 64, gain: 0.60, fade: 4,
+    { id: 'celli', chain: 1, baseUrl: '/samples/orchestra/celli/', min: 40, max: 64, gain: 0.348, fade: 4, byArousal: [1.5, 0, -2],
       urls: urlsFor(['C2', 'D#2', 'F#2', 'A2', 'C3', 'D#3', 'F#3', 'A3', 'C4', 'D#4', 'F#4', 'A4', 'C5']) },
-    { id: 'violas', chain: 2, baseUrl: '/samples/orchestra/violas/', min: 48, max: 80, gain: 0.57, fade: 4,
+    { id: 'violas', chain: 2, baseUrl: '/samples/orchestra/violas/', min: 48, max: 80, gain: 0.331, fade: 4, byArousal: [0.5, 0, -0.5],
       urls: urlsFor(['C3', 'D#3', 'F#3', 'A3', 'C4', 'D#4', 'F#4', 'A4', 'C5', 'D#5', 'F#5', 'A5', 'C6']) },
-    { id: 'violins', chain: 3, baseUrl: '/samples/orchestra/violins/', min: 60, max: 84, gain: 0.76, fade: 4,
+    { id: 'violins', chain: 3, baseUrl: '/samples/orchestra/violins/', min: 60, max: 84, gain: 0.441, fade: 4, byArousal: [-2.5, 0, 3],
       urls: urlsFor(['G3', 'A#3', 'C#4', 'E4', 'G4', 'A#4', 'C#5', 'E5', 'G5', 'A#5', 'C#6', 'E6', 'G6', 'A#6']) },
-    { id: 'horns', chain: 4, baseUrl: '/samples/orchestra/horns/', min: 44, max: 72, gain: 0.66, fade: 4,
+    { id: 'horns', chain: 4, baseUrl: '/samples/orchestra/horns/', min: 44, max: 72, gain: 0.383, fade: 4, byArousal: [-3, 0, 3],
       urls: urlsFor(['E2', 'G2', 'A#2', 'C#3', 'E3', 'G3', 'A#3', 'C#4', 'E4', 'G4', 'A#4', 'C#5', 'E5']) },
-    { id: 'clarinets', chain: 5, baseUrl: '/samples/orchestra/clarinets/', min: 48, max: 80, gain: 0.50, fade: 4,
+    { id: 'clarinets', chain: 5, baseUrl: '/samples/orchestra/clarinets/', min: 48, max: 80, gain: 0.290, fade: 4, byArousal: [1.5, 0, -1.5],
       urls: urlsFor(['D3', 'F3', 'G#3', 'B3', 'D4', 'F4', 'G#4', 'B4', 'D5', 'F5', 'G#5', 'B5', 'D6']) },
-    { id: 'flutes', chain: 6, baseUrl: '/samples/orchestra/flutes/', min: 58, max: 84, gain: 0.50, fade: 4,
+    { id: 'flutes', chain: 6, baseUrl: '/samples/orchestra/flutes/', min: 58, max: 84, gain: 0.290, fade: 4, byArousal: [-4, 0, 4],
       urls: urlsFor(['C3', 'D#3', 'F#3', 'A3', 'C4', 'D#4', 'F#4', 'A4', 'C5', 'D#5', 'F#5', 'A5']) },
     // the choir spans the whole range: male voices (G2–F#4) in the low-mid, where a sung vowel
     // stands apart from the strings, and female voices above G4
-    { id: 'choir', chain: 7, baseUrl: '/samples/', min: 46, max: 79, gain: 0.86, fade: 4,
+    { id: 'choir', chain: 7, baseUrl: '/samples/', min: 46, max: 79, gain: 0.499, fade: 4, byArousal: [2.5, 0, -3.5],
       urls: { ...urlsFor(MALE, 'choir-male/'), ...urlsFor(FEMALE, 'choir-female/') } },
   ],
   register: 0,
   span: 28,
   ceiling: 81,
   lowpass: 6000,
-  level: 0.17, // matched to the pad by measurement (RMS 0.113 / 0.104 at 0.19 vs the pad's 0.099)
+  level: 0.293, // gains carry headroom for the arousal boosts (x0.58); matched to the pad by measurement
   // Re-striking: each layer follows its own schedule (a chain) at a slightly different
   // interval, so the eight layers' swells never line up into one audible pulse; a new strike
   // fades in over 2s while the old one fades out over 2s, with 1.2s of overlap, on linear
@@ -179,15 +182,44 @@ export function voiceFromLocation(): Voice {
   return VOICES[id] ?? pad
 }
 
+// A layer's offset in dB at an arousal, from its three anchors.
+export function presenceDb(layer: Layer, arousal: number): number {
+  const p = layer.byArousal
+  if (!p) return 0
+  if (arousal <= 0.1) return p[0]
+  if (arousal >= 0.9) return p[2]
+  return arousal < 0.5 ? p[0] + ((p[1] - p[0]) * (arousal - 0.1)) / 0.4 : p[1] + ((p[2] - p[1]) * (arousal - 0.5)) / 0.4
+}
+
+// Moving sections forward and back must not make the whole louder or quieter: the layers'
+// combined power is held to what it is at the middle.
+function loudnessKeep(voice: Voice, arousal: number): number {
+  if (!voice.layers.some((l) => l.byArousal)) return 1
+  let base = 0
+  let now = 0
+  for (const l of voice.layers) {
+    base += l.gain ** 2
+    now += (l.gain * 10 ** (presenceDb(l, arousal) / 20)) ** 2
+  }
+  return Math.sqrt(base / now)
+}
+
 // Which layers sound a note, and how strongly. The sampler for a layer is asked for
-// `note + transpose` at `velocity`; a layer that does not cover the note is left out.
-export function routeNote(voice: Voice, note: number): { layer: Layer; note: number; velocity: number }[] {
+// `note + transpose` at `velocity`; a layer that does not cover the note is left out. The
+// arousal at that moment decides which sections are forward (calm: voices and strings;
+// energetic: horns, violins and flutes).
+export function routeNote(
+  voice: Voice,
+  note: number,
+  arousal = 0.5
+): { layer: Layer; note: number; velocity: number }[] {
   const out: { layer: Layer; note: number; velocity: number }[] = []
+  const keep = loudnessKeep(voice, arousal)
   for (const layer of voice.layers) {
     if (note < layer.min || note > layer.max) continue
     const fade = layer.fade ?? 0
     const edge = fade > 0 ? Math.min(1, (note - layer.min + 1) / fade, (layer.max - note + 1) / fade) : 1
-    const velocity = layer.gain * edge
+    const velocity = Math.min(1, layer.gain * edge * keep * 10 ** (presenceDb(layer, arousal) / 20))
     if (velocity > 0.02) out.push({ layer, note: note + (layer.transpose ?? 0), velocity })
   }
   return out
