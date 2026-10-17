@@ -43,6 +43,11 @@ const GENTLE = [
 // not just implied.
 const COLOR_INTERVAL = [6, 11, 10, 9, 8, 1, 6]
 
+// The pitch class that marks a mode (see above), for anything that needs to rank a chord's notes.
+export const colorPc = (rung: Rung, tonic: number) => (tonic + COLOR_INTERVAL[rung]) % 12
+// The pitch class of a mode's third.
+export const thirdPc = (rung: Rung, tonic: number) => (tonic + SCALE_MAP[LADDER[rung]].intervals[2]) % 12
+
 // One change to what is sounding. A voice moving has both; a voice entering has no
 // `from`; a voice leaving has no `to`.
 export interface Move {
@@ -154,6 +159,12 @@ export class DriftEngine {
 
   private get root(): number {
     return rootNear(this.tonic, 50 + this.register)
+  }
+
+  // The tonic in this engine's register, whether or not the chord holds it at the moment:
+  // an anchor for anything that needs one steady note.
+  get tonicNote(): number {
+    return this.root
   }
 
   private get modeThird(): number {

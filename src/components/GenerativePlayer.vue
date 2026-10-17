@@ -1,14 +1,15 @@
 <script setup lang="ts">
   import { onMounted, onUnmounted } from 'vue'
   import {
-    Composer,
     layoutTimeline,
     positionAt,
     textIndexAt,
     arousalAt,
     type TimelinePlan,
   } from '../engine/compose'
-  import { routeNote, voiceFromLocation } from '../engine/voices'
+  import { currentTempoFeel, routeNote, voiceFromLocation } from '../engine/voices'
+  import { performerFor, type Performer } from '../engine/performer'
+  import { pulseBpm, TEMPO_FEEL } from '../engine/pulse'
 
   interface Props {
     plan: Omit<TimelinePlan, 'rng'>
@@ -44,7 +45,9 @@
   let reverb: InstanceType<ToneModule['Reverb']> | undefined
   let filter: InstanceType<ToneModule['Filter']> | undefined
   let master: InstanceType<ToneModule['Gain']> | undefined
-  let composer: Composer
+  let composer: Performer
+  let delay: InstanceType<ToneModule['FeedbackDelay']> | undefined
+  const tempoFeel = currentTempoFeel() // slow / medium / fast, for the pulse
   let t0 = 0 // audio-context time at which the drift began
   let halted = false
   let scheduleTimer: number | undefined
@@ -61,6 +64,9 @@
     }
   }
 
+  const echoSeconds = (arousal: number) =>
+    voice.echo ? (voice.echo.beats * 60) / pulseBpm(arousal, TEMPO_FEEL[tempoFeel]) : 0
+
   function schedule() {
     const now = Tone.now()
     for (const e of composer.pull(now - t0 + LOOKAHEAD)) {
@@ -75,7 +81,7 @@
             Tone.Frequency(r.note, 'midi').toNote(),
             e.hold - late,
             Math.max(at, now),
-            VELOCITY * r.velocity
+            VELOCITY * (e.velocity ?? 1) * r.velocity
           )
       }
     }
@@ -92,6 +98,8 @@
     // calmer music sits in a wetter room, livelier music in a drier one
     const a = arousalAt(layout, t)
     reverb?.wet.rampTo(0.45 - 0.2 * a, 0.5)
+    // a pulse's echo keeps in time as the tempo moves with arousal
+    if (delay && voice.echo) delay.delayTime.rampTo(echoSeconds(a), 0.4)
   }
 
   function clearTimers() {
@@ -118,7 +126,17 @@
     master = new Tone.Gain(0).toDestination()
     reverb = new Tone.Reverb({ decay: 8, wet: 0.35 }).connect(master) // wet follows arousal
     // an optional gentle low-pass tames the top of a bright voice
-    filter = voice.lowpass ? new Tone.Filter(voice.lowpass, 'lowpass').connect(reverb) : undefined
+    // the chain, from the end back: reverb <- echo <- low-pass <- samplers
+    let tail: InstanceType<ToneModule['Reverb']> | InstanceType<ToneModule['FeedbackDelay']> = reverb
+    if (voice.echo) {
+      delay = new Tone.FeedbackDelay({
+        delayTime: echoSeconds(layout.arousals[0]),
+        feedback: voice.echo.feedback,
+        wet: voice.echo.wet,
+      }).connect(tail)
+      tail = delay
+    }
+    filter = voice.lowpass ? new Tone.Filter(voice.lowpass, 'lowpass').connect(tail) : undefined
     await reverb.ready
     if (halted) return
 
@@ -135,25 +153,14 @@
                 release: voice.release,
                 curve: voice.curve ?? 'exponential',
                 onload: () => resolve(),
-              }).connect(filter ?? reverb!)
+              }).connect(filter ?? tail)
             )
           })
       )
     )
     if (halted) return
 
-    composer = new Composer({
-      ...props.plan,
-      register: voice.register,
-      span: voice.span,
-      ceiling: voice.ceiling,
-      attack: voice.attack,
-      link: voice.link,
-      links: voice.links,
-      overlap: voice.overlap,
-      maxHold: voice.maxHold,
-      rng: mulberry(props.seed),
-    })
+    composer = performerFor(voice, props.plan, mulberry(props.seed), tempoFeel)
     t0 = Tone.now() + 0.3
     master.gain.setValueAtTime(0, Tone.now())
     master.gain.linearRampToValueAtTime(LEVEL, t0 + FADE)
@@ -175,6 +182,7 @@
     clearTimers()
     samplers.forEach((sampler) => sampler.dispose())
     filter?.dispose()
+    delay?.dispose()
     reverb?.dispose()
     master?.dispose()
   })

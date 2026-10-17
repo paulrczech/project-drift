@@ -17,6 +17,7 @@ export interface NoteEvent {
   note: number // MIDI
   hold: number // seconds before release
   chain: number // which re-strike schedule this belongs to (a layer plays only its own chain)
+  velocity?: number // 0-1 (default 1): a pulse accents the start of each pattern
 }
 
 export interface Mark {

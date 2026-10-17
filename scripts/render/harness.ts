@@ -1,6 +1,8 @@
 import * as Tone from 'tone'
 import { composeJourney, composeTimeline, layoutTimeline, arousalAt, type JourneyPlan, type TimelinePlan, type NoteEvent } from '../../src/engine/compose'
 import { VOICES, routeNote, type Voice } from '../../src/engine/voices'
+import { performerFor } from '../../src/engine/performer'
+import { pulseBpm, TEMPO_FEEL, type TempoFeel } from '../../src/engine/pulse'
 
 // what a voice asks of the composer
 const params = (v: Voice) => ({ register: v.register, span: v.span, ceiling: v.ceiling, attack: v.attack, link: v.link, links: v.links, overlap: v.overlap, maxHold: v.maxHold })
@@ -16,7 +18,7 @@ function wav16(buf: Tone.ToneAudioBuffer, gain: number): string {
   return btoa(bin)
 }
 
-async function render(events: NoteEvent[], seconds: number, wet: number, voice0: Voice, wetAt?: (t: number) => number, only?: string[], arousalOf?: (t: number) => number) {
+async function render(events: NoteEvent[], seconds: number, wet: number, voice0: Voice, wetAt?: (t: number) => number, only?: string[], arousalOf?: (t: number) => number, feel: TempoFeel = 'medium') {
   const voice = only ? { ...voice0, layers: voice0.layers.filter(l => only.includes(l.id)) } : voice0
   const buffers = new Map(voice.layers.map(l => [l.id, new Tone.ToneAudioBuffers({ urls: l.urls, baseUrl: '/public' + l.baseUrl })]))
   await Tone.loaded()
@@ -25,14 +27,22 @@ async function render(events: NoteEvent[], seconds: number, wet: number, voice0:
     await reverb.ready
     // same curve as the live player: calmer music sits in a wetter room
     if (wetAt) for (let t = 1; t <= seconds; t++) reverb.wet.linearRampToValueAtTime(wetAt(t), t)
-    const filter = voice.lowpass ? new Tone.Filter(voice.lowpass, 'lowpass').connect(reverb) : undefined
+    // the chain, from the end back: reverb <- echo <- low-pass <- samplers (as in the live player)
+    let tail: any = reverb
+    const echoAt = (t: number) => (voice.echo!.beats * 60) / pulseBpm(arousalOf ? arousalOf(t) : 0.5, TEMPO_FEEL[feel])
+    if (voice.echo) {
+      const delay = new Tone.FeedbackDelay({ delayTime: echoAt(0), feedback: voice.echo.feedback, wet: voice.echo.wet }).connect(tail)
+      for (let t = 1; t <= seconds; t++) delay.delayTime.linearRampToValueAtTime(echoAt(t), t)
+      tail = delay
+    }
+    const filter = voice.lowpass ? new Tone.Filter(voice.lowpass, 'lowpass').connect(tail) : undefined
     const samplers = new Map(voice.layers.map(l => [l.id, new Tone.Sampler({
       urls: Object.fromEntries(Object.keys(l.urls).map(k => [k, buffers.get(l.id)!.get(k)])), attack: voice.attack, release: voice.release, curve: voice.curve ?? 'exponential',
-    }).connect(filter ?? reverb)]))
+    }).connect(filter ?? tail)]))
     // route through the FULL voice (the loudness normalisation depends on every layer), then
     // let only the chosen layers' samplers sound
     for (const e of events) for (const r of routeNote(voice0, e.note, arousalOf ? arousalOf(e.time) : 0.5)) if ((r.layer.chain ?? 0) === e.chain && samplers.has(r.layer.id))
-      samplers.get(r.layer.id)!.triggerAttackRelease(Tone.Frequency(r.note, 'midi').toNote(), e.hold, e.time, 0.8 * r.velocity)
+      samplers.get(r.layer.id)!.triggerAttackRelease(Tone.Frequency(r.note, 'midi').toNote(), e.hold, e.time, 0.8 * (e.velocity ?? 1) * r.velocity)
   }, seconds + voice.release + 6, 2)
   const L = buf.getChannelData(0); let peak = 0; for (let i = 0; i < L.length; i++) peak = Math.max(peak, Math.abs(L[i]))
   // RMS over the body of the render (not the fade-in/out), to compare voices' loudness
@@ -55,8 +65,10 @@ async function render(events: NoteEvent[], seconds: number, wet: number, voice0:
   let voice = { ...VOICES[(plan as any).voice ?? 'pad'], ...((plan as any).override ?? {}) } as Voice
   // syncChains: every layer re-strikes in unison (for measuring what desynchronising buys)
   if ((plan as any).override?.syncChains) voice = { ...voice, layers: voice.layers.map(l => ({ ...l, chain: 0 })), links: [voice.link] }
-  const c = composeTimeline({ ...plan, ...params(voice) })
+  const feel: TempoFeel = (plan as any).tempoFeel ?? 'medium'
   const lay = layoutTimeline(plan.waypoints, plan.walk)
-  return { ...(await render(c.events, c.duration, wet, voice, (t) => 0.45 - 0.2 * arousalAt(lay, t), (plan as any).only, (t) => arousalAt(lay, t))), marks: c.marks, events: c.events.length }
+  const performer = performerFor(voice, plan, plan.rng ?? Math.random, feel)
+  const events = performer.pull(lay.duration)
+  return { ...(await render(events, lay.duration, wet, voice, (t) => 0.45 - 0.2 * arousalAt(lay, t), (plan as any).only, (t) => arousalAt(lay, t), feel)), marks: [], events: events.length }
 }
 ;(window as any).renderNote = async (note: number, wet = 0, voiceId = 'pad') => render([{ time: 0, note, hold: 5 }], 5, wet, VOICES[voiceId])
