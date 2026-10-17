@@ -6,7 +6,7 @@
 // Each layer answers for a range of notes. A note is sent to every layer whose range holds
 // it, softer near the edges of the range, so the sections blend as the voices move.
 //
-// For now a voice is chosen with `?voice=pad|choir|choir-mixed|orchestra` — no picker yet.
+// The orchestra is the default. `?voice=pad|choir|choir-mixed|orchestra` picks another — no picker yet.
 
 export interface Layer {
   id: string
@@ -177,9 +177,22 @@ const orchestra: Voice = {
 
 export const VOICES: Record<string, Voice> = { pad, choir, 'choir-mixed': choirMixed, orchestra }
 
+export const DEFAULT_VOICE = 'orchestra'
+
 export function voiceFromLocation(): Voice {
-  const id = new URLSearchParams(window.location.search).get('voice') ?? 'pad'
-  return VOICES[id] ?? pad
+  const id = new URLSearchParams(window.location.search).get('voice') ?? DEFAULT_VOICE
+  return VOICES[id] ?? VOICES[DEFAULT_VOICE]
+}
+
+// Start fetching a voice's samples into the browser's cache before a drift begins, so Begin
+// is not a silent wait. Called once, when someone first shows intent (chooses a stop).
+let preloaded = false
+export function preloadVoice(voice: Voice) {
+  if (preloaded) return
+  preloaded = true
+  for (const layer of voice.layers)
+    for (const file of Object.values(layer.urls))
+      fetch(layer.baseUrl + file, { priority: 'low' } as RequestInit).catch(() => {})
 }
 
 // A layer's offset in dB at an arousal, from its three anchors.

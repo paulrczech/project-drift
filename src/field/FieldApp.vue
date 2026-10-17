@@ -14,10 +14,16 @@
   import { rungFor } from '../engine/moods'
   import { layoutTimeline, type TimelinePlan } from '../engine/compose'
 
-  // Tone.js is large and only needed once a drift starts, so the player loads on demand.
-  const GenerativePlayer = defineAsyncComponent(
-    () => import('../components/GenerativePlayer.vue')
-  )
+  import { preloadVoice, voiceFromLocation } from '../engine/voices'
+
+  // Tone.js is large and only needed once a drift starts, so the player loads on demand —
+  // and, with the samples, is fetched ahead of time as soon as someone chooses a first stop.
+  const loadPlayer = () => import('../components/GenerativePlayer.vue')
+  const GenerativePlayer = defineAsyncComponent(loadPlayer)
+  function warmUp() {
+    loadPlayer()
+    preloadVoice(voiceFromLocation())
+  }
 
   // ── state ───────────────────────────────────────────────────────────────────────────
   // `points` is the journey, in order (the interface offers one or two; nothing below
@@ -59,6 +65,7 @@
     const last = points.value[points.value.length - 1]
     if (last && last.v === p.v && last.a === p.a) return // the same place again: nothing to add
     reset()
+    warmUp()
     const n = points.value.length
     if (n === 0) {
       points.value = [p]
@@ -94,6 +101,7 @@
   function setFromWords(index: number, p: Point | null) {
     if (drifting.value) return
     reset()
+    if (p) warmUp()
     if (!p) {
       points.value = points.value.filter((_, k) => k !== index)
       say('Removed a stop.')
