@@ -118,7 +118,7 @@ function wellSpaced(c: Cluster, calm: boolean): boolean {
 export class DriftEngine {
   cluster: Cluster
   rung: Rung
-  readonly tonic: number
+  tonic: number // moves only through modulate(), a fifth at a time
   readonly register: number
   readonly low: number
   readonly high: number
@@ -325,6 +325,35 @@ export class DriftEngine {
       // Darkening lowers the degree; brightening raises it.
       let target = note - direction
       // If the semitone is already taken, take the same pitch class an octave away.
+      if (next.includes(target)) target += 12 * (this.rng() < 0.5 ? 1 : -1)
+      moves.push({ from: note, to: target })
+      next[i] = target
+    })
+    this.cluster = sortCluster(next)
+    this.remember()
+    this.cluster.forEach((n) => this.pending.delete(n % 12))
+    return moves
+  }
+
+  // Move the key by a perfect fifth (+1 = up, sharper; -1 = down, flatter), keeping the mode.
+  // The two collections differ by exactly one pitch class, a semitone apart (C major → G major:
+  // F → F#), so — as with a mode step — each voice holding it follows by a semitone, and the
+  // rest stay. A key far away is reached through the keys between, one fifth at a time. The
+  // register window stays where it was; only what the voices lean on (the tonic) changes.
+  modulate(direction: 1 | -1): Move[] {
+    const before = pcsOf(this.rung, this.tonic)
+    this.tonic = (((this.tonic + 7 * direction) % 12) + 12) % 12
+    const after = pcsOf(this.rung, this.tonic)
+    const gone = [...before].find((pc) => !after.has(pc))!
+    const came = [...after].find((pc) => !before.has(pc))!
+    this.pending.delete(gone)
+    this.pending.add(came)
+
+    const moves: Move[] = []
+    const next = [...this.cluster]
+    next.forEach((note, i) => {
+      if (note % 12 !== gone) return
+      let target = note + direction // sharper keys raise the degree, flatter keys lower it
       if (next.includes(target)) target += 12 * (this.rng() < 0.5 ? 1 : -1)
       moves.push({ from: note, to: target })
       next[i] = target

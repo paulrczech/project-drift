@@ -132,11 +132,11 @@ export class PulseComposer {
     this.rng = plan.rng ?? Math.random
     this.beat = plan.beat
     this.bpm = clampBpm(plan.bpm ?? defaultBpm(plan.waypoints, plan.tempoScale ?? 1))
-    this.layout = layoutTimeline(plan.waypoints, plan.walk)
+    this.layout = layoutTimeline(plan.waypoints, plan.walk, plan.tonic)
     this.flips = this.layout.flips
     this.engine = new DriftEngine({
       rung: plan.waypoints[0].rung,
-      tonic: plan.tonic,
+      tonic: this.layout.tonic0,
       register: plan.register,
       span: plan.span,
       ceiling: plan.ceiling,
@@ -162,7 +162,9 @@ export class PulseComposer {
       const nf = this.nextFlip < this.flips.length ? this.flips[this.nextFlip].time : Infinity
       if (Math.min(nf, this.moveAt) > t) return
       if (nf <= this.moveAt) {
-        this.engine.shift(this.flips[this.nextFlip++].dir)
+        const f = this.flips[this.nextFlip++]
+        if (f.kind === 'key') this.engine.modulate(f.dir)
+        else this.engine.shift(f.dir)
       } else {
         this.engine.setArousal(arousalAt(this.layout, this.moveAt))
         this.engine.step()

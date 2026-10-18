@@ -1,5 +1,7 @@
 <script setup lang="ts">
-  import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
+  import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+  import KeyPicker from './KeyPicker.vue'
+  import { NOTE_NAMES } from '../engine/score'
   import {
     EMOTIONS,
     describe,
@@ -19,11 +21,13 @@
     points: Point[] // chosen so far (0–2)
     travel: number | null // fractional position along `points` while drifting, else null
     drifting: boolean
+    keys: (number | null)[] // per stop: its key, or null (the first: auto; later: the same as before)
   }>()
 
   const emit = defineEmits<{
     (e: 'choose', point: Point): void
     (e: 'remove', index: number): void
+    (e: 'key', index: number, key: number | null): void
     (e: 'clear'): void
     (e: 'preview', point: Point | null): void
   }>()
@@ -68,6 +72,12 @@
   const hovered = ref<Emotion | null>(null)
 
   function down(e: PointerEvent) {
+    if ((e.target as HTMLElement).closest('.bubble')) return
+    if (editing.value !== null) {
+      // a press elsewhere only closes the bubble: it is not a new stop
+      closeBubble(false)
+      return
+    }
     if (props.drifting || (e.target as HTMLElement).closest('button')) return
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
     dragging.value = toPlane(e)
@@ -160,6 +170,56 @@
     dotRefs.get(next.label)?.focus()
   }
 
+  // ── a stop's bubble: its key, and taking it away ────────────────────────────────────
+  const editing = ref<number | null>(null)
+  const markerRefs = new Map<number, HTMLElement>()
+  const bubble = ref<HTMLElement | null>(null)
+  const BUBBLE_W = 210
+  const bubbleAt = ref({ left: 0, top: 0 })
+
+  async function openBubble(i: number) {
+    if (props.drifting) return
+    editing.value = i
+    const r = plane.value!.getBoundingClientRect()
+    const p = props.points[i]
+    const x = p.v * r.width
+    const y = (1 - p.a) * r.height
+    // beside the marker, kept on screen; above it when it sits low, so the ring stays clear
+    const left = Math.min(Math.max(x - BUBBLE_W / 2, 8 - r.left), window.innerWidth - r.left - BUBBLE_W - 8)
+    bubbleAt.value = { left, top: p.a < 0.4 ? y - 34 - 132 : y + 34 }
+    await nextTick()
+    bubble.value?.querySelector<HTMLElement>('select')?.focus()
+  }
+  function closeBubble(returnFocus = true) {
+    const i = editing.value
+    editing.value = null
+    if (returnFocus && i !== null) markerRefs.get(i)?.focus()
+  }
+  function removeEditing() {
+    const i = editing.value
+    if (i === null) return
+    closeBubble(false)
+    emit('remove', i)
+  }
+  function bubbleKey(ev: KeyboardEvent) {
+    if (ev.key === 'Escape') {
+      ev.preventDefault()
+      ev.stopPropagation()
+      closeBubble()
+    }
+  }
+  watch(
+    () => props.points.length,
+    (n) => {
+      if (editing.value !== null && editing.value >= n) editing.value = null
+    }
+  )
+  watch(
+    () => props.drifting,
+    (d) => d && (editing.value = null)
+  )
+  const keyTag = (i: number) => (props.keys[i] === null || props.keys[i] === undefined ? '' : ` · ${NOTE_NAMES[props.keys[i] as number]}`)
+
   // ── the journey ─────────────────────────────────────────────────────────────────────
   const traveller = computed<Point | null>(() => {
     if (props.travel === null || props.points.length < 2) return null
@@ -220,17 +280,47 @@
       <button
         v-for="(p, i) in points"
         :key="`marker-${i}`"
+        :ref="(el) => el && markerRefs.set(i, el as HTMLElement)"
         class="marker"
         :class="{ destination: points.length > 1 && i === points.length - 1 }"
         :style="pos(p)"
-        :aria-label="`${markerName(i)}: ${labelFor(p)}. Press to remove.`"
+        :aria-label="`${markerName(i)}: ${labelFor(p)}${keyTag(i)}. Press for its key, or to remove it.`"
+        aria-haspopup="dialog"
+        :aria-expanded="editing === i"
         :disabled="drifting"
         tabindex="-1"
         type="button"
-        @click="emit('remove', i)">
+        @click="openBubble(i)">
         <span class="ring"><span class="num">{{ i + 1 }}</span></span>
-        <span class="word">{{ labelFor(p) }}</span>
+        <span class="word">{{ labelFor(p) }}{{ keyTag(i) }}</span>
       </button>
+
+      <div
+        v-if="editing !== null && points[editing]"
+        ref="bubble"
+        class="bubble"
+        role="dialog"
+        :aria-label="`${markerName(editing)}: ${labelFor(points[editing])}`"
+        :style="{ left: bubbleAt.left + 'px', top: bubbleAt.top + 'px', width: BUBBLE_W + 'px' }"
+        @keydown="bubbleKey">
+        <div class="bubble-head">
+          <span>stop {{ editing + 1 }} · {{ labelFor(points[editing]) }}</span>
+          <button class="bubble-close" type="button" aria-label="Close" @click="closeBubble()">
+            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false">
+              <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none" />
+            </svg>
+          </button>
+        </div>
+        <label class="bubble-row">
+          <span>key</span>
+          <KeyPicker
+            :model-value="keys[editing] ?? null"
+            :neutral="editing === 0 ? 'auto' : 'same'"
+            :label="`Key for stop ${editing + 1}`"
+            @update:model-value="emit('key', editing, $event)" />
+        </label>
+        <button class="bubble-remove" type="button" @click="removeEditing">remove this stop</button>
+      </div>
 
       <div v-if="traveller" class="traveller" :style="pos(traveller)" aria-hidden="true"></div>
 
@@ -348,6 +438,72 @@
   .marker:focus-visible .ring {
     outline: 2px solid var(--ink);
     outline-offset: 4px;
+  }
+
+  .bubble {
+    position: absolute;
+    z-index: 3;
+    box-sizing: border-box;
+    padding: 6px 10px 10px;
+    display: grid;
+    gap: 6px;
+    border-radius: 14px;
+    /* always the dark theme, whatever colours lie behind it */
+    --ink: #f2f2f7;
+    --ink-contrast: #15171f;
+    background: rgba(21, 23, 31, 0.94);
+    color: var(--ink);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    cursor: default;
+    font-size: 0.8rem;
+    letter-spacing: 0.05em;
+  }
+  .bubble button,
+  .bubble-close {
+    position: static;
+    margin: 0;
+  }
+  .bubble-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .bubble-close {
+    width: 44px;
+    height: 44px;
+    margin: -6px -10px -6px 0;
+    border-radius: 10px;
+  }
+  .bubble-close:hover {
+    background: color-mix(in srgb, var(--ink) 12%, transparent);
+  }
+  .bubble-close:focus-visible,
+  .bubble-remove:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: -2px;
+  }
+  .bubble-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .bubble-row span {
+    width: 2.4rem;
+  }
+  .bubble-remove {
+    width: 100%;
+    height: 44px;
+    border-radius: 10px;
+    border: 1.5px solid color-mix(in srgb, var(--ink) 40%, transparent);
+    display: grid;
+    place-items: center;
+    font-size: 0.8rem;
+    letter-spacing: 0.06em;
+  }
+  .bubble-remove:hover {
+    background: color-mix(in srgb, var(--ink) 12%, transparent);
   }
 
   .ghost {

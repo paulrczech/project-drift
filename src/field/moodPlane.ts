@@ -10,6 +10,7 @@ import { emotionPalettes } from '../data/EmotionGradient'
 export interface Point {
   v: number // valence 0..1
   a: number // arousal 0..1
+  key?: number // the stop's key (pitch class); left out, it is the key of the stop before
 }
 
 export interface Emotion extends Point {

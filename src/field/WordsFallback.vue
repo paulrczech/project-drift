@@ -1,6 +1,7 @@
 <script setup lang="ts">
   import { ref } from 'vue'
   import { EMOTIONS, type Point } from './moodPlane'
+  import KeyPicker from './KeyPicker.vue'
 
   // The fallback: the 21 words as plain dropdowns, one per stop of the journey, plus one more
   // to add the next stop. Anything the field can do by touch, pointer or arrow key, this can do
@@ -8,12 +9,14 @@
 
   const props = defineProps<{
     points: Point[]
+    keys: (number | null)[] // each stop's key (the first: auto; later: null = the same as before)
     drifting: boolean
     max: number
   }>()
 
   const emit = defineEmits<{
     (e: 'set', index: number, point: Point | null): void
+    (e: 'key', index: number, key: number | null): void
   }>()
 
   const open = ref(false)
@@ -50,18 +53,28 @@
     </button>
 
     <div v-show="open" id="words-panel" class="panel">
-      <label v-for="i in slots()" :key="i">
-        <span>{{ caption(i) }}</span>
-        <select
-          :value="labelOf(points[i])"
-          :disabled="drifting || (i > 0 && !points[i - 1])"
-          @change="pick(i, $event)">
-          <option value="">
-            {{ points[i] && !labelOf(points[i]) ? 'a place on the field' : i === 0 ? 'choose…' : i < points.length ? 'remove this stop' : 'stay here' }}
-          </option>
-          <option v-for="e in sorted" :key="e.label" :value="e.label">{{ e.label }}</option>
-        </select>
-      </label>
+      <div v-for="i in slots()" :key="i" class="stop">
+        <label>
+          <span>{{ caption(i) }}</span>
+          <select
+            :value="labelOf(points[i])"
+            :disabled="drifting || (i > 0 && !points[i - 1])"
+            @change="pick(i, $event)">
+            <option value="">
+              {{ points[i] && !labelOf(points[i]) ? 'a place on the field' : i === 0 ? 'choose…' : i < points.length ? 'remove this stop' : 'stay here' }}
+            </option>
+            <option v-for="e in sorted" :key="e.label" :value="e.label">{{ e.label }}</option>
+          </select>
+        </label>
+        <KeyPicker
+          v-if="points[i]"
+          class="stop-key"
+          :model-value="keys[i] ?? null"
+          :neutral="i === 0 ? 'auto' : 'same'"
+          :label="`Key for ${i === 0 ? 'where you are' : 'stop ' + (i + 1)}`"
+          :disabled="drifting"
+          @update:model-value="emit('key', i, $event)" />
+      </div>
     </div>
   </div>
 </template>
@@ -104,9 +117,26 @@
     padding: 14px;
     max-width: min(320px, calc(100vw - 28px));
     border-radius: 14px;
-    background: color-mix(in srgb, var(--ink-contrast) 90%, transparent);
+    /* always the dark theme, whatever colours lie behind it */
+    --ink: #f2f2f7;
+    --ink-contrast: #15171f;
+    background: rgba(21, 23, 31, 0.94);
+    color: var(--ink);
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
+  }
+  .stop {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+  }
+  .stop label {
+    flex: 1;
+    min-width: 0;
+  }
+  .stop-key {
+    flex: none;
+    min-width: 84px;
   }
   label {
     display: grid;

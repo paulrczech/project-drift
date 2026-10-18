@@ -3,7 +3,7 @@
 // long notes the harmony really holds, split by section for the orchestra. Pure: no Tone.
 
 import { LADDER } from './drift'
-import { Composer, arousalAt, type TimelinePlan } from './compose'
+import { Composer, arousalAt, stateAt, type TimelinePlan } from './compose'
 import { PulseComposer, START } from './pulse'
 import { mulberry } from './rng'
 import { performerFor } from './performer'
@@ -27,11 +27,15 @@ export interface Score {
   tracks: ScoreTrack[]
   markers: { time: number; text: string }[] // the mode as it changes
   duration: number
-  key: string
-  modes: string[] // the mode of each stop, in order (consecutive repeats merged)
+  key: string // the key it starts in
+  uniformKey: boolean // false when the journey changes key (then each mode label carries its key)
+  modes: string[] // the mode (and, if the key changes, key) of each stop, in order (repeats merged)
 }
 
-export const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+// Key names as musicians write them (Eb major, not D# major); F# is the one sharp.
+export const NOTE_NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B']
+// the sharp spellings, accepted when reading files and text
+export const SHARP_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 
 // Sounds with no beat (the pad, the sections) are written at 60 BPM, so a beat is a second and
 // the notes sit where they sounded.
@@ -114,15 +118,17 @@ export function scoreFor(
     tracks.push(...[...byLayer.values()].filter((t) => t.notes.length))
   }
 
-  // the mode, wherever it changes
-  let rung = waypoints[0].rung
-  const markers = [{ time: 0, text: LADDER[rung] }]
+  // the mode (and key, if it changes), wherever either changes
+  const uniformKey = layout.tonics.every((t) => t === layout.tonics[0])
+  const name = (rung: number, tonic: number) => `${uniformKey ? '' : NOTE_NAMES[tonic] + ' '}${LADDER[rung]}`
+  const markers = [{ time: 0, text: name(layout.rung0, layout.tonic0) }]
   for (const f of layout.flips) {
-    rung += f.dir
+    const now = stateAt(layout, f.time) // every step at this instant included
     const last = markers[markers.length - 1]
-    if (f.time - last.time < 1e-6) last.text = LADDER[rung]
-    else markers.push({ time: f.time, text: LADDER[rung] })
+    const text = name(now.rung, now.tonic)
+    if (f.time - last.time < 1e-6) last.text = text
+    else markers.push({ time: f.time, text })
   }
-  const modes = waypoints.map((w) => LADDER[w.rung]).filter((m, i, a) => m !== a[i - 1])
-  return { bpm, tracks, markers, duration: layout.duration, key: NOTE_NAMES[plan.tonic ?? 2], modes }
+  const modes = waypoints.map((w, i) => name(w.rung, layout.tonics[i])).filter((m, i, a) => m !== a[i - 1])
+  return { bpm, tracks, markers, duration: layout.duration, key: NOTE_NAMES[layout.tonic0], uniformKey, modes }
 }

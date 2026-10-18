@@ -1,5 +1,5 @@
 <script setup lang="ts">
-  import { computed, defineAsyncComponent, ref, watch } from 'vue'
+  import { computed, defineAsyncComponent, ref, shallowRef, watch } from 'vue'
   import FieldBackground from './FieldBackground.vue'
   import MoodField from './MoodField.vue'
   import JourneyRing from './JourneyRing.vue'
@@ -19,7 +19,7 @@
     type Point,
   } from './moodPlane'
   import { rungFor } from '../engine/moods'
-  import { layoutTimeline, type Layout, type TimelinePlan } from '../engine/compose'
+  import { layoutTimeline, stateAt, type Layout, type TimelinePlan } from '../engine/compose'
   import { TEMPO_FEEL, clampBpm, defaultBpm } from '../engine/pulse'
   import { LADDER } from '../engine/drift'
 
@@ -96,12 +96,14 @@
   // waypoints each covers, so the one that is sounding can be marked as the drift moves.
   interface Stage {
     mode: string
+    key: number // pitch class
+    label: string // "dorian", or "Ab major" when the journey changes key
     rung: number
     from: number
     to: number
   }
-  const info = ref<{ key: string; stages: Stage[]; bpm?: number; seed: string } | null>(null)
-  let layout: Layout | null = null
+  const info = ref<{ key: string; uniform: boolean; stages: Stage[]; bpm?: number; seed: string } | null>(null)
+  const layout = shallowRef<Layout | null>(null) // reactive, so what is sounding follows it
   // what was begun, so it can be taken away exactly as it sounded (same plan, seed, voice, tempo)
   let lastDrift: {
     voiceId: string
@@ -110,8 +112,9 @@
     bpm?: number
     stops: string
     minutes: number
-    key: string
-    modes: string[]
+    key: string // the key it starts in
+    head: string // the key as it begins a file name ('' when the journey changes key)
+    modes: string[] // one label per stage
     points: Point[]
     words: string[]
   } | null = null
@@ -206,7 +209,8 @@
       say('Removed a stop.')
       return
     }
-    if (index < points.value.length) points.value = points.value.map((q, k) => (k === index ? p : q))
+    if (index < points.value.length)
+      points.value = points.value.map((q, k) => (k === index ? (q.key === undefined ? p : { ...p, key: q.key }) : q))
     else if (index === points.value.length && index < MAX_POINTS) points.value = [...points.value, p]
     say(`${index === 0 ? 'Where you are' : ordinal(index + 1)}: ${wordFor(p)}.`)
   }
@@ -216,10 +220,10 @@
   // (ending in the fade), and the middle 55% travelling — split between the legs, with a brief
   // settle (a third of a leg) at each stop in between so every mood is heard. ∞ travels over
   // ten minutes, then stays.
-  function planFor(pts: Point[], m: number) {
+  function planFor(pts: Point[], m: number, tonics: number[]) {
     const endless = m === Infinity
     const total = (endless ? 10 : m) * 60
-    const moods = pts.map((p) => ({ rung: rungFor(p.v), arousal: p.a }))
+    const moods = pts.map((p, i) => ({ rung: rungFor(p.v), arousal: p.a, tonic: tonics[i] }))
     const n = moods.length
     if (n === 1) return { waypoints: [{ ...moods[0], hold: endless ? Infinity : total }], walk: 0 }
     const leg = (total * 0.55) / (n - 1 + 0.3 * (n - 2))
@@ -237,22 +241,29 @@
     clearTimeout(audioTeardown)
     const forcedSeed = seedOverride
     reset()
-    plan.value = {
-      ...planFor(points.value, minutes.value),
-      tonic: rootChoice.value ?? Math.floor(Math.random() * 12), // auto: a fresh key each drift
-    }
-    totalSeconds.value = layoutTimeline(plan.value.waypoints, plan.value.walk).duration
+    // each stop's key: the first is the journey's (chosen, or a fresh one each drift); a later stop
+    // with none chosen keeps the key of the stop before it
+    const tonics: number[] = []
+    points.value.forEach((p, i) =>
+      tonics.push(i === 0 ? rootChoice.value ?? Math.floor(Math.random() * 12) : p.key ?? tonics[i - 1])
+    )
+    plan.value = { ...planFor(points.value, minutes.value, tonics), tonic: tonics[0] }
+    totalSeconds.value = layoutTimeline(plan.value.waypoints, plan.value.walk, plan.value.tonic).duration
     seed.value = forcedSeed ?? Math.floor(Math.random() * 2 ** 31)
     const pulse = VOICES[voiceId.value]?.style === 'pulse'
     driftBpm.value = pulse ? effectiveBpm.value : undefined
+    const uniform = tonics.every((t) => t === tonics[0])
     const stages: Stage[] = []
     plan.value.waypoints.forEach((w, i) => {
       const last = stages[stages.length - 1]
-      if (last && last.rung === w.rung) last.to = i
-      else stages.push({ mode: LADDER[w.rung], rung: w.rung, from: i, to: i })
+      if (last && last.rung === w.rung && last.key === tonics[i]) last.to = i
+      else {
+        const mode = LADDER[w.rung]
+        stages.push({ mode, key: tonics[i], label: uniform ? mode : `${NOTE_NAMES[tonics[i]]} ${mode}`, rung: w.rung, from: i, to: i })
+      }
     })
-    layout = layoutTimeline(plan.value.waypoints, plan.value.walk)
-    info.value = { key: NOTE_NAMES[plan.value.tonic ?? 0], stages, bpm: driftBpm.value, seed: `seed ${seed.value}` }
+    layout.value = layoutTimeline(plan.value.waypoints, plan.value.walk, plan.value.tonic)
+    info.value = { key: NOTE_NAMES[tonics[0]], uniform, stages, bpm: driftBpm.value, seed: `seed ${seed.value}` }
     lastDrift = {
       voiceId: voiceId.value,
       plan: plan.value,
@@ -261,7 +272,8 @@
       stops: points.value.map(wordFor).join(' > '),
       minutes: minutes.value,
       key: info.value.key,
-      modes: stages.map((st) => st.mode),
+      head: uniform ? info.value.key : '',
+      modes: stages.map((st) => st.label),
       points: points.value.map((p) => ({ ...p })),
       words: points.value.map(wordFor),
     }
@@ -275,7 +287,7 @@
         ? `in ${words[0]}`
         : `from ${words[0]}${words.length > 2 ? ` through ${words.slice(1, -1).join(', ')}` : ''} to ${words[words.length - 1]}`
     say(
-      `Drifting ${route} ${lengthName(minutes.value)}, in ${NOTE_NAMES[plan.value.tonic ?? 0]}${driftBpm.value ? `, ${driftBpm.value} beats per minute` : ''}.`
+      `Drifting ${route} ${lengthName(minutes.value)}, ${uniform ? `in ${NOTE_NAMES[tonics[0]]}` : `from ${NOTE_NAMES[tonics[0]]} to ${NOTE_NAMES[tonics[tonics.length - 1]]}`}${driftBpm.value ? `, ${driftBpm.value} beats per minute` : ''}.`
     )
   }
 
@@ -297,7 +309,7 @@
       seed: d.seed,
       modes: d.modes,
     })
-    const name = exportName(d.key, d.modes, d.bpm, 'drift.json')
+    const name = exportName(d.head, d.modes, d.bpm, 'drift.json')
     download(new TextEncoder().encode(JSON.stringify(project, null, 2) + '\n'), name, 'application/json')
     say(`Project saved: ${d.key} ${d.modes.join(' to ')}.`)
   }
@@ -314,7 +326,7 @@
     }
     const p = r.project
     reset()
-    points.value = p.stops.map((s) => ({ v: s.v, a: s.a }))
+    points.value = p.stops.map((s) => (s.key === undefined ? { v: s.v, a: s.a } : { v: s.v, a: s.a, key: s.key }))
     minutes.value = p.minutes
     rootChoice.value = p.root
     if (VOICES[p.voice]) {
@@ -334,8 +346,8 @@
       const d = lastDrift
       const score = scoreFor(VOICES[d.voiceId], d.plan, d.seed, { bpm: d.bpm })
       const bytes = await midiBytes(score, { voice: VOICES[d.voiceId].label, seed: d.seed, stops: d.stops, minutes: d.minutes })
-      download(bytes, exportName(score.key, score.modes, d.bpm, 'mid'), 'audio/midi')
-      say(`MIDI file saved: ${score.key} ${score.modes.join(' to ')}.`)
+      download(bytes, exportName(d.head, d.modes, d.bpm, 'mid'), 'audio/midi')
+      say(`MIDI file saved: ${d.head ? d.head + ' ' : ''}${d.modes.join(' to ')}.`)
     } catch {
       say('Sorry, the MIDI file could not be made.')
     } finally {
@@ -355,8 +367,8 @@
       const bytes = await renderDriftWav(voice, d.plan, d.seed, { bpm: d.bpm }, (p) => {
         exporting.value = p.stage === 'loading' ? 'loading…' : `rendering ${Math.round(p.done * 100)}%`
       })
-      download(bytes, exportName(d.key, d.modes, d.bpm, 'wav'), 'audio/wav')
-      say(`Audio file saved: ${d.key} ${d.modes.join(' to ')}.`)
+      download(bytes, exportName(d.head, d.modes, d.bpm, 'wav'), 'audio/wav')
+      say(`Audio file saved: ${d.head ? d.head + ' ' : ''}${d.modes.join(' to ')}.`)
     } catch {
       say('Sorry, the audio could not be rendered.')
     } finally {
@@ -364,19 +376,17 @@
     }
   }
 
-  // The mode sounding now: the first waypoint's, moved by every ladder step made so far.
-  const rungNow = computed(() => {
-    if (!layout || !plan.value) return -1
-    return plan.value.waypoints[0].rung + layout.flips.reduce((r, f) => (f.time <= elapsed.value ? r + f.dir : r), 0)
-  })
-  // Which label to mark: among the stages in this mode, the one nearest the travelling point.
-  // While passing through a mode that is not a stop (a long walk), nothing is marked.
+  // The mode and key sounding now: the start, moved by every step made so far.
+  const nowState = computed(() => (layout.value ? stateAt(layout.value, elapsed.value) : null))
+  // Which label to mark: among the stages in this mode and key, the one nearest the travelling
+  // point. While passing through a mode or key that is not a stop (a long walk), nothing is marked.
   const activeStage = computed(() => {
-    if (!info.value || (!drifting.value && elapsed.value === 0)) return -1 // nothing is sounding
+    const now = nowState.value
+    if (!info.value || !now || (!drifting.value && elapsed.value === 0)) return -1 // nothing is sounding
     let best = -1
     let gap = Infinity
     info.value.stages.forEach((st, i) => {
-      if (st.rung !== rungNow.value) return
+      if (st.rung !== now.rung || st.key !== now.tonic) return
       const d = position.value < st.from ? st.from - position.value : position.value > st.to ? position.value - st.to : 0
       if (d < gap) {
         gap = d
@@ -385,13 +395,37 @@
     })
     return best
   })
-  // between two stops a long walk passes through modes that have no label: say which
-  const passing = computed(() =>
-    drifting.value && info.value && activeStage.value < 0 && rungNow.value >= 0 ? `passing ${LADDER[rungNow.value]}` : '\u00a0'
-  )
-  watch(activeStage, (i, before) => {
-    if (drifting.value && i >= 0 && i !== before && info.value) say(`Now in ${info.value.stages[i].mode}.`)
+  // between two stops a long walk passes through modes and keys that have no label: say which
+  const passing = computed(() => {
+    const now = nowState.value
+    if (!drifting.value || !info.value || !now || activeStage.value >= 0) return '\u00a0'
+    return `passing ${info.value.uniform ? '' : NOTE_NAMES[now.tonic] + ' '}${LADDER[now.rung]}`
   })
+  watch(activeStage, (i, before) => {
+    if (drifting.value && i >= 0 && i !== before && info.value) say(`Now in ${info.value.stages[i].label}.`)
+  })
+
+  // ── a stop's key ────────────────────────────────────────────────────────────────────
+  // The first stop's key is the journey's (also set in the sound menu); a later stop's is its own,
+  // or none, which keeps the key of the stop before.
+  const stopKeys = computed<(number | null)[]>(() => [
+    rootChoice.value,
+    ...points.value.slice(1).map((p) => p.key ?? null),
+  ])
+  function setStopKey(i: number, key: number | null) {
+    if (drifting.value || i >= points.value.length) return
+    if (i === 0) {
+      chooseRoot(key)
+      return
+    }
+    reset()
+    points.value = points.value.map((p, k) => {
+      if (k !== i) return p
+      const { key: _gone, ...rest } = p
+      return key === null ? rest : { ...rest, key }
+    })
+    say(`Stop ${i + 1}: ${key === null ? 'the same key as before' : NOTE_NAMES[key]}.`)
+  }
 
   function finish(announce: string) {
     drifting.value = false
@@ -450,7 +484,13 @@
     <FieldBackground :palette="palette" />
 
     <div :style="vars(topInk)">
-      <WordsFallback :points="points" :drifting="drifting" :max="MAX_POINTS" @set="setFromWords" />
+      <WordsFallback
+        :points="points"
+        :keys="stopKeys"
+        :drifting="drifting"
+        :max="MAX_POINTS"
+        @set="setFromWords"
+        @key="setStopKey" />
     </div>
 
     <MoodField
@@ -458,17 +498,19 @@
       :points="points"
       :travel="drifting ? position : null"
       :drifting="drifting"
+      :keys="stopKeys"
       @choose="choose"
       @remove="remove"
+      @key="setStopKey"
       @clear="clear"
       @preview="preview = $event" />
 
     <p class="hint" :class="{ journey: !!info }" :style="vars(topInk)" aria-hidden="true">
       {{ hint }}
       <template v-if="info">
-        {{ info.key }} ·
+        <template v-if="info.uniform">{{ info.key }} ·</template>
         <template v-for="(st, i) in info.stages" :key="i">
-          <span class="mode" :class="{ on: i === activeStage }">{{ st.mode }}</span>
+          <span class="mode" :class="{ on: i === activeStage }">{{ st.label }}</span>
           <template v-if="i < info.stages.length - 1"> → </template>
         </template>
         <template v-if="info.bpm"> · {{ info.bpm }} BPM</template>

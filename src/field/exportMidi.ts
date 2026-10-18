@@ -14,7 +14,7 @@ export interface Provenance {
 export async function midiBytes(score: Score, info: Provenance): Promise<Uint8Array> {
   const { Midi } = await import('@tonejs/midi')
   const midi = new Midi()
-  midi.header.name = `Drift - ${score.key} ${score.modes.join(' > ')}`
+  midi.header.name = `Drift - ${score.uniformKey ? score.key + ' ' : ''}${score.modes.join(' > ')}`
   midi.header.setTempo(score.bpm)
   // @tonejs/midi has no setTimeSignature(): the array is edited directly, then header.update()
   // (as in Eddy's exporter). 4/4, so bars fall where a DAW expects them.
@@ -36,9 +36,15 @@ export async function midiBytes(score: Score, info: Provenance): Promise<Uint8Ar
   return midi.toArray()
 }
 
-// e.g. drift-A-phrygian-to-lydian-72bpm.mid (the BPM only where the sound has one)
-export const exportName = (key: string, modes: string[], bpm: number | undefined, ext: string) =>
-  `drift-${key.replace('#', 'sharp')}-${modes.join('-to-')}${bpm ? `-${bpm}bpm` : ''}.${ext}`
+// e.g. drift-A-phrygian-to-lydian-72bpm.mid, or drift-D-dorian-to-Ab-major-to-C-lydian.mid when the
+// journey changes key (`head` is the key a file name begins with, empty then; the BPM only where
+// the sound has one)
+export const exportName = (head: string, modes: string[], bpm: number | undefined, ext: string) =>
+  ['drift', head, modes.join('-to-')]
+    .filter(Boolean)
+    .join('-')
+    .replace(/\s+/g, '-')
+    .replace('#', 'sharp') + `${bpm ? `-${bpm}bpm` : ''}.${ext}`
 
 export function download(bytes: Uint8Array, filename: string, mime: string) {
   const url = URL.createObjectURL(new Blob([bytes.buffer as ArrayBuffer], { type: mime }))

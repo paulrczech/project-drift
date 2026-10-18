@@ -10,7 +10,7 @@
 // (settle in the final mode until stopped); a finite plan can also be composed in one go
 // with `composeTimeline`.
 
-import { DriftEngine, beatFor, type Move, type Rung } from './drift'
+import { DEFAULT_TONIC, DriftEngine, beatFor, type Move, type Rung } from './drift'
 
 export interface NoteEvent {
   time: number // seconds from the start
@@ -39,6 +39,7 @@ export interface Mark {
 // hold may be Infinity.
 export interface Waypoint {
   rung: Rung
+  tonic?: number // pitch class of this stop's key; left out, it is the previous stop's (the first: the plan's)
   hold: number
   arousal?: number // 0 still … 1 energised (default 0.4)
 }
@@ -97,14 +98,20 @@ export interface Walk {
 }
 
 // One step up (+1, brighter) or down (-1, darker) the ladder.
+// A `rung` step moves the mode one rung up (+1, brighter) or down (-1); a `key` step moves the
+// key a perfect fifth up (+1, sharper) or down (-1). Each changes exactly one pitch class.
 export interface Flip {
   time: number
   dir: 1 | -1
+  kind: 'rung' | 'key'
 }
 
 export interface Layout {
   walks: Walk[]
-  flips: Flip[] // every ladder step, in time order
+  flips: Flip[] // every mode or key step, in time order
+  rung0: number // the mode and key the drift starts in
+  tonic0: number
+  tonics: number[] // per waypoint
   arousals: number[] // per waypoint
   duration: number // Infinity if the last hold is Infinity
 }
@@ -116,9 +123,18 @@ export const DEFAULT_AROUSAL = 0.4
 // several semitone moves — still voice-led, and still arriving where the journey goes.
 export const MIN_FLIP_GAP = 2.5
 
-export function layoutTimeline(waypoints: Waypoint[], walk: number | number[]): Layout {
+// The way round the circle of fifths from one key to another: how many fifths up (+) or down (-),
+// the shorter way (a tritone goes up).
+export function fifthsBetween(from: number, to: number): number {
+  const k = ((((to - from) * 7) % 12) + 12) % 12 // 7 is its own inverse mod 12
+  return k > 6 ? k - 12 : k
+}
+
+export function layoutTimeline(waypoints: Waypoint[], walk: number | number[], startTonic = DEFAULT_TONIC): Layout {
   const walks: Walk[] = []
   const raw: Flip[] = []
+  const tonics: number[] = []
+  waypoints.forEach((w, i) => tonics.push(w.tonic ?? (i === 0 ? startTonic : tonics[i - 1])))
   let at = 0
   waypoints.forEach((w, i) => {
     at += w.hold
@@ -127,7 +143,18 @@ export function layoutTimeline(waypoints: Waypoint[], walk: number | number[]): 
     const seconds = Array.isArray(walk) ? walk[i] : walk
     const n = Math.abs(next.rung - w.rung)
     const dir = next.rung > w.rung ? 1 : -1
-    for (let k = 0; k < n; k++) raw.push({ time: at + ((k + 0.5) * seconds) / n, dir })
+    const k = fifthsBetween(tonics[i], tonics[i + 1])
+    const m = Math.abs(k)
+    // mode steps and key steps share the walk, spread evenly among one another
+    const total = n + m
+    let keys = 0
+    for (let j = 0; j < total; j++) {
+      const time = at + ((j + 0.5) * seconds) / total
+      if (Math.round(((j + 1) * m) / total) > keys) {
+        keys++
+        raw.push({ time, dir: k > 0 ? 1 : -1, kind: 'key' })
+      } else raw.push({ time, dir, kind: 'rung' })
+    }
     walks.push({ start: at, end: at + seconds, flips: [] })
     at += seconds
   })
@@ -137,16 +164,37 @@ export function layoutTimeline(waypoints: Waypoint[], walk: number | number[]): 
   const flips: Flip[] = []
   for (let i = 0; i < raw.length; ) {
     let j = i
-    let net = 0
-    while (j < raw.length && raw[j].time - raw[i].time < MIN_FLIP_GAP) net += raw[j++].dir
-    for (let k = 0; k < Math.abs(net); k++) flips.push({ time: raw[i].time, dir: net > 0 ? 1 : -1 })
+    const net = { rung: 0, key: 0 }
+    while (j < raw.length && raw[j].time - raw[i].time < MIN_FLIP_GAP) net[raw[j].kind] += raw[j++].dir
+    for (const kind of ['key', 'rung'] as const)
+      for (let k = 0; k < Math.abs(net[kind]); k++) flips.push({ time: raw[i].time, dir: net[kind] > 0 ? 1 : -1, kind })
     i = j
   }
   for (const f of flips) {
     const w = walks.find((x) => f.time >= x.start && f.time <= x.end)
     if (w) w.flips.push(f.time)
   }
-  return { walks, flips, arousals: waypoints.map((w) => w.arousal ?? DEFAULT_AROUSAL), duration: at }
+  return {
+    walks,
+    flips,
+    rung0: waypoints[0].rung,
+    tonic0: tonics[0],
+    tonics,
+    arousals: waypoints.map((w) => w.arousal ?? DEFAULT_AROUSAL),
+    duration: at,
+  }
+}
+
+// The mode and key sounding at time t: the start, moved by every step made so far.
+export function stateAt(layout: Layout, t: number): { rung: number; tonic: number } {
+  let rung = layout.rung0
+  let fifths = 0
+  for (const f of layout.flips) {
+    if (f.time > t) break
+    if (f.kind === 'rung') rung += f.dir
+    else fifths += f.dir
+  }
+  return { rung, tonic: (((layout.tonic0 + 7 * fifths) % 12) + 12) % 12 }
 }
 
 // Arousal at time t: constant while settled, a straight line along each walk.
@@ -227,11 +275,11 @@ export class Composer {
     this.maxLast = plan.maxHold ?? MAX_LAST
     this.settle = this.overlap + 0.5
     this.lookahead = Math.max(...this.links) * 1.15 + this.settle + 1
-    this.layout = layoutTimeline(plan.waypoints, plan.walk)
+    this.layout = layoutTimeline(plan.waypoints, plan.walk, plan.tonic)
     this.flips = this.layout.flips
     this.engine = new DriftEngine({
       rung: plan.waypoints[0].rung,
-      tonic: plan.tonic,
+      tonic: this.layout.tonic0,
       register: plan.register,
       span: plan.span,
       ceiling: plan.ceiling,
@@ -313,8 +361,10 @@ export class Composer {
     return Math.max(MIN_BEAT, Math.min(base, (w.end - w.start) / (w.flips.length * 1.2)))
   }
 
-  private flip(f: { time: number; dir: 1 | -1 }) {
-    this.engine.shift(f.dir) // voices holding the changed degree follow it
+  private flip(f: Flip) {
+    // voices holding the changed degree follow it
+    if (f.kind === 'key') this.engine.modulate(f.dir)
+    else this.engine.shift(f.dir)
     this.marks.push({ time: f.time, kind: 'shift', rung: this.engine.rung })
     // the shifted notes have to be reflected in what is sounding
     const cluster = this.engine.cluster

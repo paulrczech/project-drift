@@ -1,7 +1,7 @@
 <script setup lang="ts">
   import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
   import { LISTED_VOICES, VOICES, type TempoFeelName } from '../engine/voices'
-  import { NOTE_NAMES } from '../engine/score'
+  import KeyPicker from './KeyPicker.vue'
   import { BPM_MAX, BPM_MIN, clampBpm } from '../engine/pulse'
 
   // "sound": a quiet word beside the ring that opens a short list of voices. Choosing one
@@ -35,10 +35,6 @@
       emit('update:bpm', n)
       input.value = String(clampBpm(n)) // show what was kept, even if the stored value did not change
     } else input.value = String(props.bpm)
-  }
-  function typedRoot(ev: Event) {
-    const v = (ev.target as HTMLSelectElement).value
-    emit('update:root', v === 'auto' ? null : Number(v))
   }
   function bpmKey(ev: KeyboardEvent) {
     if (ev.key === 'Escape') {
@@ -182,10 +178,7 @@
       </div>
       <div class="tempo keyrow">
         <label class="tempo-label" for="drift-key">key</label>
-        <select id="drift-key" class="key" :value="root === null ? 'auto' : String(root)" @change="typedRoot" @keydown="bpmKey">
-          <option value="auto">auto</option>
-          <option v-for="(n, i) in NOTE_NAMES" :key="n" :value="String(i)">{{ n }}</option>
-        </select>
+        <KeyPicker id="drift-key" :model-value="root" neutral="auto" label="Key" @update:model-value="emit('update:root', $event)" @keydown="bpmKey" />
       </div>
     </div>
   </div>
@@ -363,27 +356,6 @@
     margin-top: 12px;
     border-top: 0;
     padding: 0 8px 14px;
-  }
-  .key {
-    appearance: none;
-    -webkit-appearance: none;
-    box-sizing: border-box;
-    height: 44px;
-    min-width: 92px;
-    margin: 0;
-    padding: 0 12px;
-    font: inherit;
-    font-size: 0.85rem;
-    letter-spacing: 0.04em;
-    background: transparent;
-    color: var(--ink);
-    border: 1.5px solid color-mix(in srgb, var(--ink) 40%, transparent);
-    border-radius: 10px;
-    cursor: pointer;
-  }
-  .key:focus-visible {
-    outline: 2px solid var(--ink);
-    outline-offset: 2px;
   }
   .chip:focus-visible {
     outline: 2px solid var(--ink);
