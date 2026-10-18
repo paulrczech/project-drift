@@ -5,7 +5,7 @@
   // drift lasts (∞ never ends). The centre begins the drift; once it is under way the
   // stops fall away, the centre becomes "end", and the ring fills as time passes.
 
-  const LENGTHS = [1, 5, 10, 20, Infinity]
+  const LENGTHS = [1, 4, 7, 10, Infinity]
 
   const props = defineProps<{
     modelValue: number // minutes; Infinity for no end

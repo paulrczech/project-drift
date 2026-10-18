@@ -2,6 +2,7 @@
 //   Needs: npm i --no-save playwright-core   (Chromium from Playwright's cache, or set CHROME=...)
 //   node scripts/render/run.mjs timelines '[["film",{"waypoints":[{"rung":5,"hold":6},{"rung":3,"hold":4},{"rung":0,"hold":6}],"walk":[6,8],"tonic":2,"seed":3}]]'
 //   (add "tonic": 0-11 and "voice": "pad" | "choir" to either plan; defaults D and pad)
+//   node scripts/render/run.mjs export '[["name",{"waypoints":[…],"walk":20,"tonic":2,"seed":3,"voice":"orchestra"}]]'   (the app's own WAV export)
 //   node scripts/render/run.mjs pitch
 //   node scripts/render/run.mjs journeys '[["name",{"from":5,"to":1,"holdA":40,"shiftSeconds":40,"holdB":40,"seed":7}]]'
 // Output: renders/<name>.wav (gitignored), normalised to -3 dB for listening.
@@ -27,6 +28,7 @@ const browser = await chromium.launch({ executablePath: chrome, args: ['--autopl
 try {
   const page = await browser.newPage()
   page.on('pageerror', (e) => console.log('PAGEERROR', e.message))
+  page.on('console', (m) => m.text().startsWith('renderExport') && console.log(m.text()))
   await page.goto(`http://localhost:${PORT}/scripts/render/index.html`)
   if (process.argv[2] === 'pitch') {
     for (const note of [50, 57, 69, 76]) {
@@ -35,7 +37,7 @@ try {
       console.log('note', note, 'raw peak', r.peak.toFixed(3))
     }
   } else {
-    const fn = process.argv[2] === 'timelines' ? 'renderTimeline' : 'renderJourney'
+    const fn = process.argv[2] === 'timelines' ? 'renderTimeline' : process.argv[2] === 'export' ? 'renderExport' : 'renderJourney'
     for (const [name, plan] of JSON.parse(process.argv[3])) {
       const t = Date.now()
       const r = await page.evaluate(([f, p]) => window[f](p), [fn, plan])

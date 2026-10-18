@@ -36,8 +36,9 @@ export async function midiBytes(score: Score, info: Provenance): Promise<Uint8Ar
   return midi.toArray()
 }
 
-export const exportName = (score: Score, ext: string) =>
-  `drift-${score.key.replace('#', 'sharp')}-${score.modes.join('-to-')}${score.tracks.length === 1 && score.bpm !== 60 ? `-${score.bpm}bpm` : ''}.${ext}`
+// e.g. drift-A-phrygian-to-lydian-72bpm.mid (the BPM only where the sound has one)
+export const exportName = (key: string, modes: string[], bpm: number | undefined, ext: string) =>
+  `drift-${key.replace('#', 'sharp')}-${modes.join('-to-')}${bpm ? `-${bpm}bpm` : ''}.${ext}`
 
 export function download(bytes: Uint8Array, filename: string, mime: string) {
   const url = URL.createObjectURL(new Blob([bytes.buffer as ArrayBuffer], { type: mime }))

@@ -1,6 +1,8 @@
 <script setup lang="ts">
   import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
   import { LISTED_VOICES, VOICES, type TempoFeelName } from '../engine/voices'
+  import { NOTE_NAMES } from '../engine/score'
+  import { BPM_MAX, BPM_MIN, clampBpm } from '../engine/pulse'
 
   // "sound": a quiet word beside the ring that opens a short list of voices. Choosing one
   // applies to the next drift (the stops are the same: this only changes what plays them).
@@ -10,6 +12,7 @@
     tempo: TempoFeelName // slow / medium / fast, for the pulse
     bpm: number // the tempo in effect (from the feel, or typed)
     customBpm: boolean // an exact BPM was typed, so no feel is chosen
+    root: number | null // the key chosen (0 = C … 11 = B), or null for a new one each drift
     disabled: boolean
   }>()
 
@@ -17,6 +20,7 @@
     (e: 'update:modelValue', id: string): void
     (e: 'update:tempo', feel: TempoFeelName): void
     (e: 'update:bpm', bpm: number): void
+    (e: 'update:root', root: number | null): void
   }>()
 
   const FEELS: TempoFeelName[] = ['slow', 'medium', 'fast']
@@ -25,8 +29,16 @@
   const feelStop = (f: TempoFeelName) => (props.customBpm ? f === FEELS[0] : f === props.tempo)
 
   function typedBpm(ev: Event) {
-    const n = Number((ev.target as HTMLInputElement).value)
-    if (Number.isFinite(n) && n > 0) emit('update:bpm', n)
+    const input = ev.target as HTMLInputElement
+    const n = Number(input.value)
+    if (Number.isFinite(n) && n > 0) {
+      emit('update:bpm', n)
+      input.value = String(clampBpm(n)) // show what was kept, even if the stored value did not change
+    } else input.value = String(props.bpm)
+  }
+  function typedRoot(ev: Event) {
+    const v = (ev.target as HTMLSelectElement).value
+    emit('update:root', v === 'auto' ? null : Number(v))
   }
   function bpmKey(ev: KeyboardEvent) {
     if (ev.key === 'Escape') {
@@ -37,7 +49,7 @@
   const feelRefs = ref<HTMLElement[]>([])
 
   const open = ref(false)
-  const root = ref<HTMLElement | null>(null)
+  const wrap = ref<HTMLElement | null>(null)
   const toggle = ref<HTMLElement | null>(null)
   const items = ref<HTMLElement[]>([])
 
@@ -57,9 +69,10 @@
     if (returnFocus) toggle.value?.focus()
   }
 
+  // choosing leaves the menu open (the tempo and key sit below the voices); the close button,
+  // Escape, or a tap outside closes it
   function choose(id: string) {
     emit('update:modelValue', id)
-    hide()
   }
 
   async function onKey(ev: KeyboardEvent, i: number) {
@@ -92,14 +105,14 @@
 
   // a tap or click anywhere else closes it
   function outside(ev: PointerEvent) {
-    if (open.value && root.value && !root.value.contains(ev.target as Node)) hide(false)
+    if (open.value && wrap.value && !wrap.value.contains(ev.target as Node)) hide(false)
   }
   onMounted(() => document.addEventListener('pointerdown', outside))
   onBeforeUnmount(() => document.removeEventListener('pointerdown', outside))
 </script>
 
 <template>
-  <div ref="root" class="sound">
+  <div ref="wrap" class="sound">
     <button
       ref="toggle"
       class="toggle"
@@ -113,6 +126,11 @@
     </button>
 
     <div v-show="open" id="sound-list" class="list" :class="{ wide: isPulse() }">
+      <button class="close" type="button" aria-label="Close sound menu" @click="hide()">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+          <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none" />
+        </svg>
+      </button>
       <div class="voices" role="radiogroup" aria-label="Sound">
       <button
         v-for="(v, i) in LISTED_VOICES"
@@ -152,8 +170,8 @@
           <input
             type="number"
             inputmode="numeric"
-            min="40"
-            max="140"
+            :min="BPM_MIN"
+            :max="BPM_MAX"
             step="1"
             :value="bpm"
             aria-label="Beats per minute"
@@ -161,6 +179,13 @@
             @keydown="bpmKey" />
           <span aria-hidden="true">BPM</span>
         </label>
+      </div>
+      <div class="tempo keyrow">
+        <label class="tempo-label" for="drift-key">key</label>
+        <select id="drift-key" class="key" :value="root === null ? 'auto' : String(root)" @change="typedRoot" @keydown="bpmKey">
+          <option value="auto">auto</option>
+          <option v-for="(n, i) in NOTE_NAMES" :key="n" :value="String(i)">{{ n }}</option>
+        </select>
       </div>
     </div>
   </div>
@@ -213,13 +238,35 @@
     max-width: calc(100vw - 24px);
     padding: 6px;
     border-radius: 14px;
-    background: color-mix(in srgb, var(--ink-contrast) 90%, transparent);
+    /* always the dark theme, whatever colours lie behind it */
+    --ink: #f2f2f7;
+    --ink-contrast: #15171f;
+    background: rgba(21, 23, 31, 0.94);
+    color: var(--ink);
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
   }
 
   .list.wide {
-    min-width: 330px;
+    min-width: min(330px, calc(100vw - 24px));
+  }
+
+  .close {
+    justify-self: end;
+    min-width: 44px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    margin-bottom: -6px;
+  }
+  .close:hover {
+    background: color-mix(in srgb, var(--ink) 12%, transparent);
+  }
+  .close:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: -2px;
   }
 
   .voices {
@@ -251,16 +298,20 @@
 
   .tempo {
     display: flex;
+    flex-wrap: wrap; /* only on a very narrow screen; otherwise one row */
     align-items: center;
     gap: 4px;
-    margin-top: 4px;
-    padding: 6px 6px 2px;
+    margin-top: 6px;
+    padding: 16px 8px 6px;
     border-top: 1px solid color-mix(in srgb, var(--ink) 25%, transparent);
   }
   .tempo-label {
     font-size: 0.7rem;
     letter-spacing: 0.06em;
-    margin-right: 2px;
+    /* one width for every row's label, so the controls beside them line up */
+    flex: none;
+    width: 3.4rem;
+    text-align: left;
   }
   .chip {
     min-height: 44px;
@@ -305,6 +356,32 @@
     margin: 0;
   }
   .bpm input:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
+  }
+  .keyrow {
+    margin-top: 12px;
+    border-top: 0;
+    padding: 0 8px 14px;
+  }
+  .key {
+    appearance: none;
+    -webkit-appearance: none;
+    box-sizing: border-box;
+    height: 44px;
+    min-width: 92px;
+    margin: 0;
+    padding: 0 12px;
+    font: inherit;
+    font-size: 0.85rem;
+    letter-spacing: 0.04em;
+    background: transparent;
+    color: var(--ink);
+    border: 1.5px solid color-mix(in srgb, var(--ink) 40%, transparent);
+    border-radius: 10px;
+    cursor: pointer;
+  }
+  .key:focus-visible {
     outline: 2px solid var(--ink);
     outline-offset: 2px;
   }

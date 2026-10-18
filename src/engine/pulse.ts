@@ -56,7 +56,7 @@ export function defaultBpm(waypoints: { arousal?: number }[], scale = 1): number
 }
 
 export const BPM_MIN = 40
-export const BPM_MAX = 140
+export const BPM_MAX = 200
 export const clampBpm = (bpm: number) => Math.min(BPM_MAX, Math.max(BPM_MIN, Math.round(bpm)))
 
 export interface PulsePlan extends VoiceParams {

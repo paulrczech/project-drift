@@ -82,6 +82,14 @@ export function scoreFor(
         velocity: Math.min(1, VELOCITY * (e.velocity ?? 1) * r.velocity),
       })
     }
+    // a repeated pitch rings into its next strike in the sampler; in a DAW that would be an overlap
+    // of the same note, which many instruments cut short or drop, so each ends where the next begins
+    const nextOf = new Map<number, ScoreNote>()
+    for (const n of [...notes].reverse()) {
+      const next = nextOf.get(n.midi)
+      if (next && n.time + n.duration > next.time) n.duration = Math.max(0.05, next.time - n.time - 0.005)
+      nextOf.set(n.midi, n)
+    }
     tracks.push({ name: voice.label, program: PROGRAMS[voice.id] ?? PROGRAMS.pulse, notes })
   } else if (performer instanceof Composer) {
     const loudest = Math.max(...voice.layers.map((l) => l.gain))

@@ -3,6 +3,7 @@ import { composeJourney, composeTimeline, layoutTimeline, arousalAt, type Journe
 import { VOICES, routeNote, type Voice } from '../../src/engine/voices'
 import { performerFor } from '../../src/engine/performer'
 import { TEMPO_FEEL, defaultBpm, type TempoFeel } from '../../src/engine/pulse'
+import { renderDriftWav } from '../../src/engine/render'
 
 // what a voice asks of the composer
 const params = (v: Voice) => ({ register: v.register, span: v.span, ceiling: v.ceiling, attack: v.attack, link: v.link, links: v.links, overlap: v.overlap, maxHold: v.maxHold })
@@ -71,3 +72,15 @@ async function render(events: NoteEvent[], seconds: number, wet: number, voice0:
   return { ...(await render(events, lay.duration, wet, voice, (t) => 0.45 - 0.2 * arousalAt(lay, t), (plan as any).only, (t) => arousalAt(lay, t), bpm)), marks: [], events: events.length, bpm }
 }
 ;(window as any).renderNote = async (note: number, wet = 0, voiceId = 'pad') => render([{ time: 0, note, hold: 5 }], 5, wet, VOICES[voiceId])
+
+// the app's own WAV export (src/engine/render.ts): level as the live player's, fades included
+;(window as any).renderExport = async (plan: TimelinePlan & { seed: number; voice: string; bpm?: number }) => {
+  const voice = VOICES[plan.voice]
+  const t = performance.now()
+  const bytes = await renderDriftWav(voice, { waypoints: plan.waypoints, walk: plan.walk, tonic: plan.tonic }, plan.seed, { bpm: plan.bpm }, undefined, '/public', (plan as any).cut)
+  console.log('renderExport seconds', ((performance.now() - t) / 1000).toFixed(1))
+  const pcm = new Int16Array(bytes.buffer, 44, (bytes.length - 44) / 2)
+  let peak = 0, sq = 0; for (let i = 0; i < pcm.length; i += 2) { peak = Math.max(peak, Math.abs(pcm[i]) / 32768); sq += (pcm[i] / 32768) ** 2 }
+  let bin = ''; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return { wav: btoa(bin), peak, rms: Math.sqrt(sq / (pcm.length / 2)), gain: 1, marks: [], events: 0 }
+}

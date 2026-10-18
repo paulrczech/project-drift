@@ -300,6 +300,27 @@ export function rememberCustomBpm(bpm: number) {
   }
 }
 
+// The key (root note, 0 = C … 11 = B) the listener chose, or null to let each drift pick its own.
+const ROOT_KEY = 'drift.root'
+export function currentRoot(): number | null {
+  try {
+    const raw = window.localStorage.getItem(ROOT_KEY)
+    if (raw === null) return null
+    const n = Number(raw)
+    return Number.isInteger(n) && n >= 0 && n <= 11 ? n : null
+  } catch {
+    return null
+  }
+}
+export function rememberRoot(root: number | null) {
+  try {
+    if (root === null) window.localStorage.removeItem(ROOT_KEY)
+    else window.localStorage.setItem(ROOT_KEY, String(root))
+  } catch {
+    /* applies to this visit only */
+  }
+}
+
 // Start fetching a voice's samples into the browser's cache before a drift begins, so Begin
 // is not a silent wait. Called when someone first shows intent (chooses a stop) and when they
 // pick a sound; each voice is fetched once.

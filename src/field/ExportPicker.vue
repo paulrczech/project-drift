@@ -5,8 +5,12 @@
   // away — a MIDI file for a DAW, and (soon) the audio itself. Enabled once a drift has begun,
   // because that is when its key, tempo and seed exist.
 
-  defineProps<{ enabled: boolean; busy: boolean }>()
-  const emit = defineEmits<{ (e: 'midi'): void }>()
+  defineProps<{
+    enabled: boolean
+    busy: string // '' when idle, else what is being made ("rendering…")
+    wavReady: boolean // the audio can only be rendered once nothing is playing
+  }>()
+  const emit = defineEmits<{ (e: 'midi'): void; (e: 'wav'): void }>()
 
   const open = ref(false)
   const root = ref<HTMLElement | null>(null)
@@ -22,8 +26,9 @@
     open.value = false
     if (returnFocus) toggle.value?.focus()
   }
-  function choose(kind: 'midi') {
-    emit(kind)
+  function choose(kind: 'midi' | 'wav') {
+    if (kind === 'midi') emit('midi')
+    else emit('wav')
     hide()
   }
   function onKey(ev: KeyboardEvent) {
@@ -50,7 +55,7 @@
       aria-controls="export-list"
       :disabled="!enabled"
       @click="open ? hide(false) : show()">
-      export
+      {{ busy || 'export' }}
     </button>
 
     <div v-show="open" id="export-list" class="list" @keydown="onKey">
@@ -58,14 +63,19 @@
         :ref="(el) => el && (items[0] = el as HTMLElement)"
         class="option"
         type="button"
-        :disabled="busy"
+        :disabled="busy !== ''"
         @click="choose('midi')">
         <span class="name">MIDI</span>
         <span class="note">for a DAW</span>
       </button>
-      <button class="option" type="button" disabled aria-disabled="true">
+      <button
+        :ref="(el) => el && (items[1] = el as HTMLElement)"
+        class="option"
+        type="button"
+        :disabled="busy !== '' || !wavReady"
+        @click="choose('wav')">
         <span class="name">WAV</span>
-        <span class="note">soon</span>
+        <span class="note">{{ wavReady ? 'audio' : 'when stopped' }}</span>
       </button>
     </div>
   </div>
@@ -118,7 +128,11 @@
     max-width: calc(100vw - 24px);
     padding: 6px;
     border-radius: 14px;
-    background: color-mix(in srgb, var(--ink-contrast) 90%, transparent);
+    /* always the dark theme, whatever colours lie behind it */
+    --ink: #f2f2f7;
+    --ink-contrast: #15171f;
+    background: rgba(21, 23, 31, 0.94);
+    color: var(--ink);
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
   }

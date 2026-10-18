@@ -6,8 +6,9 @@
   import WordsFallback from './WordsFallback.vue'
   import SoundPicker from './SoundPicker.vue'
   import ExportPicker from './ExportPicker.vue'
-  import { scoreFor } from '../engine/score'
+  import { NOTE_NAMES, scoreFor } from '../engine/score'
   import { download, exportName, midiBytes } from './exportMidi'
+  import { renderDriftWav } from '../engine/render'
   import {
     describe,
     paletteAt,
@@ -23,10 +24,12 @@
   import {
     VOICES,
     currentCustomBpm,
+    currentRoot,
     currentTempoFeel,
     currentVoiceId,
     preloadVoice,
     rememberCustomBpm,
+    rememberRoot,
     rememberTempoFeel,
     rememberVoice,
     voiceFromLocation,
@@ -78,8 +81,15 @@
   }
   const driftBpm = ref<number | undefined>(undefined) // the tempo this drift was started with
 
+  // The key: a root the listener chose (kept between visits), or auto — a new one each drift.
+  const rootChoice = ref<number | null>(currentRoot())
+  function chooseRoot(root: number | null) {
+    rootChoice.value = root
+    rememberRoot(root)
+    say(root === null ? 'Key: a new one each time.' : `Key: ${NOTE_NAMES[root]}.`)
+  }
+
   // What this journey is, kept on screen for a composer to note: key, modes, tempo, seed.
-  const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
   // `stages` are the modes in journey order (consecutive repeats merged); `from`/`to` are the
   // waypoints each covers, so the one that is sounding can be marked as the drift moves.
   interface Stage {
@@ -91,8 +101,17 @@
   const info = ref<{ key: string; stages: Stage[]; bpm?: number; seed: string } | null>(null)
   let layout: Layout | null = null
   // what was begun, so it can be taken away exactly as it sounded (same plan, seed, voice, tempo)
-  let lastDrift: { voiceId: string; plan: TimelinePlan; seed: number; bpm?: number; stops: string; minutes: number } | null = null
-  const exporting = ref(false)
+  let lastDrift: {
+    voiceId: string
+    plan: TimelinePlan
+    seed: number
+    bpm?: number
+    stops: string
+    minutes: number
+    key: string
+    modes: string[]
+  } | null = null
+  const exporting = ref('') // what is being made right now (shown on the export word)
 
   // ── state ───────────────────────────────────────────────────────────────────────────
   // `points` is the journey, in order (the interface offers one or two; nothing below
@@ -212,7 +231,7 @@
     reset()
     plan.value = {
       ...planFor(points.value, minutes.value),
-      tonic: Math.floor(Math.random() * 12), // a fresh key each time, never shown
+      tonic: rootChoice.value ?? Math.floor(Math.random() * 12), // auto: a fresh key each drift
     }
     totalSeconds.value = layoutTimeline(plan.value.waypoints, plan.value.walk).duration
     seed.value = Math.floor(Math.random() * 2 ** 31)
@@ -233,6 +252,8 @@
       bpm: driftBpm.value,
       stops: points.value.map(wordFor).join(' > '),
       minutes: minutes.value,
+      key: info.value.key,
+      modes: stages.map((st) => st.mode),
     }
     session.value++
     audioActive.value = true
@@ -255,17 +276,38 @@
 
   async function exportMidi() {
     if (!lastDrift || exporting.value) return
-    exporting.value = true
+    exporting.value = 'saving…'
     try {
       const d = lastDrift
       const score = scoreFor(VOICES[d.voiceId], d.plan, d.seed, { bpm: d.bpm })
       const bytes = await midiBytes(score, { voice: VOICES[d.voiceId].label, seed: d.seed, stops: d.stops, minutes: d.minutes })
-      download(bytes, exportName(score, 'mid'), 'audio/midi')
+      download(bytes, exportName(score.key, score.modes, d.bpm, 'mid'), 'audio/midi')
       say(`MIDI file saved: ${score.key} ${score.modes.join(' to ')}.`)
     } catch {
       say('Sorry, the MIDI file could not be made.')
     } finally {
-      exporting.value = false
+      exporting.value = ''
+    }
+  }
+
+  // The audio is rendered offline, faster than real time; it cannot run beside a live drift
+  // (the offline context takes over Tone's clock), so it waits until the sound has stopped.
+  async function exportWav() {
+    if (!lastDrift || exporting.value || audioActive.value) return
+    exporting.value = 'rendering…'
+    say('Rendering the audio. This can take a little while.')
+    try {
+      const d = lastDrift
+      const voice = VOICES[d.voiceId]
+      const bytes = await renderDriftWav(voice, d.plan, d.seed, { bpm: d.bpm }, (p) => {
+        exporting.value = p.stage === 'loading' ? 'loading…' : `rendering ${Math.round(p.done * 100)}%`
+      })
+      download(bytes, exportName(d.key, d.modes, d.bpm, 'wav'), 'audio/wav')
+      say(`Audio file saved: ${d.key} ${d.modes.join(' to ')}.`)
+    } catch {
+      say('Sorry, the audio could not be rendered.')
+    } finally {
+      exporting.value = ''
     }
   }
 
@@ -277,7 +319,7 @@
   // Which label to mark: among the stages in this mode, the one nearest the travelling point.
   // While passing through a mode that is not a stop (a long walk), nothing is marked.
   const activeStage = computed(() => {
-    if (!info.value) return -1
+    if (!info.value || (!drifting.value && elapsed.value === 0)) return -1 // nothing is sounding
     let best = -1
     let gap = Infinity
     info.value.stages.forEach((st, i) => {
@@ -307,7 +349,10 @@
 
   function stop() {
     playerRef.value?.stopDrift()
+    // the colours return to the start, but what was drifted stays on screen (and can be exported)
+    const kept = info.value
     reset()
+    info.value = kept
     finish('The drift has ended.')
   }
 
@@ -400,11 +445,19 @@
         :tempo="tempoFeel"
         :bpm="effectiveBpm"
         :custom-bpm="customBpm !== null"
+        :root="rootChoice"
         :disabled="drifting"
         @update:model-value="chooseVoice"
         @update:tempo="chooseTempo"
-        @update:bpm="chooseBpm" />
-      <ExportPicker class="side right low" :enabled="!!info" :busy="exporting" @midi="exportMidi" />
+        @update:bpm="chooseBpm"
+        @update:root="chooseRoot" />
+      <ExportPicker
+        class="side right low"
+        :enabled="!!info"
+        :busy="exporting"
+        :wav-ready="!audioActive"
+        @midi="exportMidi"
+        @wav="exportWav" />
     </div>
 
     <GenerativePlayer
