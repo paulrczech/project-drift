@@ -20,6 +20,13 @@ export interface NoteEvent {
   velocity?: number // 0-1 (default 1): a pulse accents the start of each pattern
 }
 
+// A voice's whole sounding time, before the sampler's re-strikes: for a DAW, one long note.
+export interface HeldNote {
+  note: number
+  start: number
+  end: number
+}
+
 export interface Mark {
   time: number
   kind: 'shift'
@@ -192,6 +199,7 @@ function unit(seed: number, id: number, k: number): number {
 export class Composer {
   readonly layout: Layout
   readonly marks: Mark[] = []
+  readonly held: HeldNote[] = [] // every note a voice held (complete once a finite plan is pulled to its end)
   private engine: DriftEngine
   private rng: () => number
   private beat: number | undefined
@@ -281,6 +289,7 @@ export class Composer {
     const e = this.open.get(note)
     if (!e) return
     e.end = t
+    this.held.push({ note: e.note, start: e.start, end: t })
     this.closed.push(e)
     this.open.delete(note)
   }

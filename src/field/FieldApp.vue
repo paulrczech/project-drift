@@ -5,6 +5,9 @@
   import JourneyRing from './JourneyRing.vue'
   import WordsFallback from './WordsFallback.vue'
   import SoundPicker from './SoundPicker.vue'
+  import ExportPicker from './ExportPicker.vue'
+  import { scoreFor } from '../engine/score'
+  import { download, exportName, midiBytes } from './exportMidi'
   import {
     describe,
     paletteAt,
@@ -87,6 +90,9 @@
   }
   const info = ref<{ key: string; stages: Stage[]; bpm?: number; seed: string } | null>(null)
   let layout: Layout | null = null
+  // what was begun, so it can be taken away exactly as it sounded (same plan, seed, voice, tempo)
+  let lastDrift: { voiceId: string; plan: TimelinePlan; seed: number; bpm?: number; stops: string; minutes: number } | null = null
+  const exporting = ref(false)
 
   // ── state ───────────────────────────────────────────────────────────────────────────
   // `points` is the journey, in order (the interface offers one or two; nothing below
@@ -220,6 +226,14 @@
     })
     layout = layoutTimeline(plan.value.waypoints, plan.value.walk)
     info.value = { key: NOTE_NAMES[plan.value.tonic ?? 0], stages, bpm: driftBpm.value, seed: `seed ${seed.value}` }
+    lastDrift = {
+      voiceId: voiceId.value,
+      plan: plan.value,
+      seed: seed.value,
+      bpm: driftBpm.value,
+      stops: points.value.map(wordFor).join(' > '),
+      minutes: minutes.value,
+    }
     session.value++
     audioActive.value = true
     drifting.value = true
@@ -237,6 +251,22 @@
   function onProgress(newPosition: number, _text: number, seconds: number) {
     position.value = newPosition
     elapsed.value = seconds
+  }
+
+  async function exportMidi() {
+    if (!lastDrift || exporting.value) return
+    exporting.value = true
+    try {
+      const d = lastDrift
+      const score = scoreFor(VOICES[d.voiceId], d.plan, d.seed, { bpm: d.bpm })
+      const bytes = await midiBytes(score, { voice: VOICES[d.voiceId].label, seed: d.seed, stops: d.stops, minutes: d.minutes })
+      download(bytes, exportName(score, 'mid'), 'audio/midi')
+      say(`MIDI file saved: ${score.key} ${score.modes.join(' to ')}.`)
+    } catch {
+      say('Sorry, the MIDI file could not be made.')
+    } finally {
+      exporting.value = false
+    }
   }
 
   // The mode sounding now: the first waypoint's, moved by every ladder step made so far.
@@ -335,7 +365,7 @@
       @clear="clear"
       @preview="preview = $event" />
 
-    <p class="hint" :style="vars(topInk)" aria-hidden="true">
+    <p class="hint" :class="{ journey: !!info }" :style="vars(topInk)" aria-hidden="true">
       {{ hint }}
       <template v-if="info">
         {{ info.key }} ·
@@ -374,6 +404,7 @@
         @update:model-value="chooseVoice"
         @update:tempo="chooseTempo"
         @update:bpm="chooseBpm" />
+      <ExportPicker class="side right low" :enabled="!!info" :busy="exporting" @midi="exportMidi" />
     </div>
 
     <GenerativePlayer
@@ -424,6 +455,18 @@
     z-index: 1;
   }
 
+  /* the journey readout is long: on a narrow screen it drops below the "words" button */
+  .field-app .hint.journey {
+    padding: 0 12px;
+    box-sizing: border-box;
+    text-wrap: balance;
+  }
+  @media (max-width: 640px) {
+    .field-app .hint.journey {
+      top: calc(70px + env(safe-area-inset-top, 0px));
+    }
+  }
+
   /* the two controls either side of the ring, level with its centre */
   .field-app .side {
     position: fixed;
@@ -466,6 +509,10 @@
   .field-app .side.right {
     left: calc(50% + 100px);
   }
+  /* export sits under sound */
+  .field-app .side.low {
+    bottom: calc(36px + env(safe-area-inset-bottom, 0px));
+  }
 
   /* the mode sounding now is ringed; the others keep their full contrast, only unmarked */
   .field-app .hint .mode {
@@ -489,7 +536,6 @@
     margin-top: 2px;
     font-size: 0.7rem;
     letter-spacing: 0.08em;
-    opacity: 0.7;
   }
 
   .field-app .sr-only {

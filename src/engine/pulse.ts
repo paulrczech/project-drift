@@ -69,7 +69,7 @@ export interface PulsePlan extends VoiceParams {
 const CELL = 8 // steps in the cell
 const PHRASE = 4 // cycles in a phrase
 const ROOT_NEAR = 53 // the tonic sits at B2-A#3; the cell spans about an octave and a half above it, within the samples (to C5)
-const START = 0.3 // seconds before the first pulse
+export const START = 0.3 // seconds before the first pulse
 const HOLD = 1.5 // a note rings this many steps (it overlaps the next; the echo does the rest)
 const MAX_TONES = 4 // chord tones in the cell
 // An ostinato holds its shape longer than a pad's chords do: the harmony beneath moves this much slower.

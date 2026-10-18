@@ -1,0 +1,49 @@
+// A drift as a standard MIDI file: one track per instrument (an orchestra gets a track per
+// section, with General MIDI programs), the mode named at each change as a marker, and the key,
+// tempo and seed in the first marker so the journey can be rebuilt.
+
+import type { Score } from '../engine/score'
+
+export interface Provenance {
+  voice: string
+  seed: number
+  stops: string // e.g. "sad > nostalgic > joyful" (MIDI text is ASCII)
+  minutes: number // Infinity for an endless drift
+}
+
+export async function midiBytes(score: Score, info: Provenance): Promise<Uint8Array> {
+  const { Midi } = await import('@tonejs/midi')
+  const midi = new Midi()
+  midi.header.name = `Drift - ${score.key} ${score.modes.join(' > ')}`
+  midi.header.setTempo(score.bpm)
+  // @tonejs/midi has no setTimeSignature(): the array is edited directly, then header.update()
+  // (as in Eddy's exporter). 4/4, so bars fall where a DAW expects them.
+  midi.header.timeSignatures.push({ ticks: 0, timeSignature: [4, 4] })
+  midi.header.update()
+
+  const ticks = (s: number) => Math.round(midi.header.secondsToTicks(s))
+  const first = `Drift | ${score.key} | ${info.stops} | ${score.bpm} BPM | ${info.voice} | seed ${info.seed}`
+  score.markers.forEach((m, i) =>
+    midi.header.meta.push({ ticks: ticks(m.time), type: 'marker', text: i === 0 ? `${first} | ${m.text}` : m.text })
+  )
+
+  for (const t of score.tracks) {
+    const track = midi.addTrack()
+    track.name = t.name
+    track.instrument.number = t.program
+    for (const n of t.notes) track.addNote({ midi: n.midi, time: n.time, duration: n.duration, velocity: n.velocity })
+  }
+  return midi.toArray()
+}
+
+export const exportName = (score: Score, ext: string) =>
+  `drift-${score.key.replace('#', 'sharp')}-${score.modes.join('-to-')}${score.tracks.length === 1 && score.bpm !== 60 ? `-${score.bpm}bpm` : ''}.${ext}`
+
+export function download(bytes: Uint8Array, filename: string, mime: string) {
+  const url = URL.createObjectURL(new Blob([bytes.buffer as ArrayBuffer], { type: mime }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}

@@ -8,6 +8,7 @@
     type TimelinePlan,
   } from '../engine/compose'
   import { routeNote, voiceFromLocation } from '../engine/voices'
+  import { mulberry } from '../engine/rng'
   import { performerFor, type Performer } from '../engine/performer'
 
   interface Props {
@@ -51,17 +52,6 @@
   let halted = false
   let scheduleTimer: number | undefined
   let progressTimer: number | undefined
-
-  function mulberry(seed: number) {
-    let a = seed
-    return () => {
-      a |= 0
-      a = (a + 0x6d2b79f5) | 0
-      let t = Math.imul(a ^ (a >>> 15), 1 | a)
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-    }
-  }
 
   // The echo is a fixed fraction of a beat, so with a fixed tempo it never moves (retiming a delay
   // bends the pitch of its repeats).
