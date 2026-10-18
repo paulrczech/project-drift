@@ -10,14 +10,21 @@ export interface Performer {
   pull(until: number): NoteEvent[]
 }
 
+// The pulse's tempo: an exact BPM, or a feel (slow / medium / fast) applied to the journey's own.
+export interface Tempo {
+  feel?: TempoFeel
+  bpm?: number
+}
+
 export function performerFor(
   voice: Voice,
   plan: Omit<TimelinePlan, 'rng'>,
   rng: () => number,
-  feel: TempoFeel = 'medium'
+  tempo: Tempo = {}
 ): Performer {
   const params = { register: voice.register, span: voice.span, ceiling: voice.ceiling, rng }
-  if (voice.style === 'pulse') return new PulseComposer({ ...plan, ...params, tempoScale: TEMPO_FEEL[feel] })
+  if (voice.style === 'pulse')
+    return new PulseComposer({ ...plan, ...params, bpm: tempo.bpm, tempoScale: TEMPO_FEEL[tempo.feel ?? 'medium'] })
   return new Composer({
     ...plan,
     ...params,

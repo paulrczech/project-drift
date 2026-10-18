@@ -8,16 +8,32 @@
   const props = defineProps<{
     modelValue: string // the chosen voice's id
     tempo: TempoFeelName // slow / medium / fast, for the pulse
+    bpm: number // the tempo in effect (from the feel, or typed)
+    customBpm: boolean // an exact BPM was typed, so no feel is chosen
     disabled: boolean
   }>()
 
   const emit = defineEmits<{
     (e: 'update:modelValue', id: string): void
     (e: 'update:tempo', feel: TempoFeelName): void
+    (e: 'update:bpm', bpm: number): void
   }>()
 
   const FEELS: TempoFeelName[] = ['slow', 'medium', 'fast']
   const isPulse = () => VOICES[props.modelValue]?.style === 'pulse'
+  // the tempo chips are one tab stop: the chosen feel, or the first when an exact BPM is set
+  const feelStop = (f: TempoFeelName) => (props.customBpm ? f === FEELS[0] : f === props.tempo)
+
+  function typedBpm(ev: Event) {
+    const n = Number((ev.target as HTMLInputElement).value)
+    if (Number.isFinite(n) && n > 0) emit('update:bpm', n)
+  }
+  function bpmKey(ev: KeyboardEvent) {
+    if (ev.key === 'Escape') {
+      ev.preventDefault()
+      hide()
+    }
+  }
   const feelRefs = ref<HTMLElement[]>([])
 
   const open = ref(false)
@@ -96,7 +112,7 @@
       sound
     </button>
 
-    <div v-show="open" id="sound-list" class="list">
+    <div v-show="open" id="sound-list" class="list" :class="{ wide: isPulse() }">
       <div class="voices" role="radiogroup" aria-label="Sound">
       <button
         v-for="(v, i) in LISTED_VOICES"
@@ -123,15 +139,28 @@
           :key="f"
           :ref="(el) => el && (feelRefs[i] = el as HTMLElement)"
           class="chip"
-          :class="{ on: f === tempo }"
+          :class="{ on: !customBpm && f === tempo }"
           role="radio"
-          :aria-checked="f === tempo"
-          :tabindex="f === tempo ? 0 : -1"
+          :aria-checked="!customBpm && f === tempo"
+          :tabindex="feelStop(f) ? 0 : -1"
           type="button"
           @click="emit('update:tempo', f)"
           @keydown="onFeelKey($event, i)">
           {{ f }}
         </button>
+        <label class="bpm">
+          <input
+            type="number"
+            inputmode="numeric"
+            min="40"
+            max="140"
+            step="1"
+            :value="bpm"
+            aria-label="Beats per minute"
+            @change="typedBpm"
+            @keydown="bpmKey" />
+          <span aria-hidden="true">BPM</span>
+        </label>
       </div>
     </div>
   </div>
@@ -189,6 +218,10 @@
     -webkit-backdrop-filter: blur(10px);
   }
 
+  .list.wide {
+    min-width: 330px;
+  }
+
   .voices {
     display: grid;
   }
@@ -226,12 +259,12 @@
   }
   .tempo-label {
     font-size: 0.7rem;
-    letter-spacing: 0.08em;
-    margin-right: 4px;
+    letter-spacing: 0.06em;
+    margin-right: 2px;
   }
   .chip {
     min-height: 44px;
-    padding: 0 10px;
+    padding: 0 8px;
     display: inline-flex;
     align-items: center;
     border-radius: 10px;
@@ -243,6 +276,37 @@
     background: var(--ink);
     border-color: var(--ink);
     color: var(--ink-contrast);
+  }
+  .bpm {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-left: auto;
+    font-size: 0.7rem;
+    letter-spacing: 0.06em;
+  }
+  .bpm input {
+    all: unset;
+    box-sizing: border-box;
+    width: 48px;
+    min-height: 44px;
+    padding: 0 4px;
+    text-align: center;
+    font-size: 0.85rem;
+    color: var(--ink);
+    border: 1.5px solid color-mix(in srgb, var(--ink) 40%, transparent);
+    border-radius: 10px;
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+  .bpm input::-webkit-outer-spin-button,
+  .bpm input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  .bpm input:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
   }
   .chip:focus-visible {
     outline: 2px solid var(--ink);

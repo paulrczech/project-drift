@@ -196,8 +196,9 @@ const orchestra: Voice = {
 // Eddy's analog synth: Moog Minitaur "Simple Saw" by modularsamples — CC0 (public domain). One
 // short note (1.9s, 11 ms attack) for every semitone, E2-C5. (Eddy's files above C5 are all
 // copies of C5 — measured — so only E2-C5 are used; the sampler transposes the rare note above.)
-// Played as an ostinato: it begins on one repeating note and the chord's notes join over the
-// journey, with a dotted-eighth echo that follows the tempo and a soft low-pass for the saw.
+// Played as an ostinato (pulse.ts): a quiet repeating cell of the mode's chord tones that changes
+// one note at a time as the journey moves, with a dotted-eighth echo that follows the tempo and a
+// soft low-pass for the saw.
 const synth: Voice = {
   id: 'pulse',
   label: 'pulse',
@@ -205,11 +206,11 @@ const synth: Voice = {
   listed: true,
   style: 'pulse',
   layers: [single('analog-synth', '/samples/analog-synth/', urlsFor(everyNote('E2', 'C5')))],
-  register: 10,
-  span: 26,
+  register: 6, // (only the harmony engine reads these; the cell folds its own register, C3-C5)
+  span: 24,
   ceiling: 79,
-  lowpass: 6000,
-  level: 1.05, // a short plucked note is quiet by RMS: set by measurement, a little under the pad
+  lowpass: 3200, // dark and soft: an understated, relaxing pulse
+  level: 1.6, // quiet by RMS (soft, sparse notes): set by measurement, a little under the pad
   attack: 0.005,
   release: 0.35,
   link: 1, // (unused: the pulse re-strikes every step)
@@ -259,6 +260,7 @@ export function rememberVoice(id: string) {
 }
 
 const TEMPO_KEY = 'drift.tempo'
+const BPM_KEY = 'drift.bpm'
 export type TempoFeelName = 'slow' | 'medium' | 'fast'
 
 export function currentTempoFeel(): TempoFeelName {
@@ -274,6 +276,25 @@ export function currentTempoFeel(): TempoFeelName {
 export function rememberTempoFeel(feel: TempoFeelName) {
   try {
     window.localStorage.setItem(TEMPO_KEY, feel)
+    window.localStorage.removeItem(BPM_KEY) // choosing a feel gives up an exact BPM
+  } catch {
+    /* applies to this visit only */
+  }
+}
+
+// An exact tempo the listener typed, if any (otherwise the feel decides).
+export function currentCustomBpm(): number | null {
+  try {
+    const n = Number(window.localStorage.getItem(BPM_KEY))
+    return Number.isFinite(n) && n > 0 ? n : null
+  } catch {
+    return null
+  }
+}
+
+export function rememberCustomBpm(bpm: number) {
+  try {
+    window.localStorage.setItem(BPM_KEY, String(bpm))
   } catch {
     /* applies to this visit only */
   }

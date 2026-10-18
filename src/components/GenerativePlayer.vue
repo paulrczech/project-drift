@@ -7,13 +7,13 @@
     arousalAt,
     type TimelinePlan,
   } from '../engine/compose'
-  import { currentTempoFeel, routeNote, voiceFromLocation } from '../engine/voices'
+  import { routeNote, voiceFromLocation } from '../engine/voices'
   import { performerFor, type Performer } from '../engine/performer'
-  import { pulseBpm, TEMPO_FEEL } from '../engine/pulse'
 
   interface Props {
     plan: Omit<TimelinePlan, 'rng'>
     seed: number
+    bpm?: number // the pulse's fixed tempo (other voices play in free time)
   }
 
   const props = defineProps<Props>()
@@ -47,7 +47,6 @@
   let master: InstanceType<ToneModule['Gain']> | undefined
   let composer: Performer
   let delay: InstanceType<ToneModule['FeedbackDelay']> | undefined
-  const tempoFeel = currentTempoFeel() // slow / medium / fast, for the pulse
   let t0 = 0 // audio-context time at which the drift began
   let halted = false
   let scheduleTimer: number | undefined
@@ -64,8 +63,9 @@
     }
   }
 
-  const echoSeconds = (arousal: number) =>
-    voice.echo ? (voice.echo.beats * 60) / pulseBpm(arousal, TEMPO_FEEL[tempoFeel]) : 0
+  // The echo is a fixed fraction of a beat, so with a fixed tempo it never moves (retiming a delay
+  // bends the pitch of its repeats).
+  const echoSeconds = () => (voice.echo && props.bpm ? (voice.echo.beats * 60) / props.bpm : 0)
 
   function schedule() {
     const now = Tone.now()
@@ -98,8 +98,6 @@
     // calmer music sits in a wetter room, livelier music in a drier one
     const a = arousalAt(layout, t)
     reverb?.wet.rampTo(0.45 - 0.2 * a, 0.5)
-    // a pulse's echo keeps in time as the tempo moves with arousal
-    if (delay && voice.echo) delay.delayTime.rampTo(echoSeconds(a), 0.4)
   }
 
   function clearTimers() {
@@ -130,7 +128,7 @@
     let tail: InstanceType<ToneModule['Reverb']> | InstanceType<ToneModule['FeedbackDelay']> = reverb
     if (voice.echo) {
       delay = new Tone.FeedbackDelay({
-        delayTime: echoSeconds(layout.arousals[0]),
+        delayTime: echoSeconds(),
         feedback: voice.echo.feedback,
         wet: voice.echo.wet,
       }).connect(tail)
@@ -160,7 +158,7 @@
     )
     if (halted) return
 
-    composer = performerFor(voice, props.plan, mulberry(props.seed), tempoFeel)
+    composer = performerFor(voice, props.plan, mulberry(props.seed), { bpm: props.bpm })
     t0 = Tone.now() + 0.3
     master.gain.setValueAtTime(0, Tone.now())
     master.gain.linearRampToValueAtTime(LEVEL, t0 + FADE)

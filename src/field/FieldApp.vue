@@ -1,5 +1,5 @@
 <script setup lang="ts">
-  import { computed, defineAsyncComponent, ref } from 'vue'
+  import { computed, defineAsyncComponent, ref, watch } from 'vue'
   import FieldBackground from './FieldBackground.vue'
   import MoodField from './MoodField.vue'
   import JourneyRing from './JourneyRing.vue'
@@ -13,13 +13,17 @@
     type Point,
   } from './moodPlane'
   import { rungFor } from '../engine/moods'
-  import { layoutTimeline, type TimelinePlan } from '../engine/compose'
+  import { layoutTimeline, type Layout, type TimelinePlan } from '../engine/compose'
+  import { TEMPO_FEEL, clampBpm, defaultBpm } from '../engine/pulse'
+  import { LADDER } from '../engine/drift'
 
   import {
     VOICES,
+    currentCustomBpm,
     currentTempoFeel,
     currentVoiceId,
     preloadVoice,
+    rememberCustomBpm,
     rememberTempoFeel,
     rememberVoice,
     voiceFromLocation,
@@ -44,13 +48,45 @@
     say(`Sound: ${VOICES[id].label}.`)
   }
 
-  // slow / medium / fast, for the pulse: scales its tempo, which still follows the mood
+  // The pulse's tempo is fixed for the whole journey. By default it comes from the stops' mean
+  // arousal, scaled by slow / medium / fast; or the listener types an exact BPM.
   const tempoFeel = ref<TempoFeelName>(currentTempoFeel())
+  const customBpm = ref<number | null>(currentCustomBpm())
+  const effectiveBpm = computed(
+    () =>
+      customBpm.value ??
+      clampBpm(
+        defaultBpm(
+          points.value.length ? points.value.map((p) => ({ arousal: p.a })) : [{ arousal: 0.4 }],
+          TEMPO_FEEL[tempoFeel.value]
+        )
+      )
+  )
   function chooseTempo(feel: TempoFeelName) {
     tempoFeel.value = feel
+    customBpm.value = null
     rememberTempoFeel(feel)
-    say(`Tempo: ${feel}.`)
+    say(`Tempo: ${feel}, ${effectiveBpm.value} BPM.`)
   }
+  function chooseBpm(bpm: number) {
+    customBpm.value = clampBpm(bpm)
+    rememberCustomBpm(customBpm.value)
+    say(`Tempo: ${customBpm.value} BPM.`)
+  }
+  const driftBpm = ref<number | undefined>(undefined) // the tempo this drift was started with
+
+  // What this journey is, kept on screen for a composer to note: key, modes, tempo, seed.
+  const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+  // `stages` are the modes in journey order (consecutive repeats merged); `from`/`to` are the
+  // waypoints each covers, so the one that is sounding can be marked as the drift moves.
+  interface Stage {
+    mode: string
+    rung: number
+    from: number
+    to: number
+  }
+  const info = ref<{ key: string; stages: Stage[]; bpm?: number; seed: string } | null>(null)
+  let layout: Layout | null = null
 
   // ── state ───────────────────────────────────────────────────────────────────────────
   // `points` is the journey, in order (the interface offers one or two; nothing below
@@ -84,6 +120,7 @@
   function reset() {
     position.value = 0
     elapsed.value = 0
+    info.value = null
   }
 
   const ordinal = (n: number) => `stop ${n}`
@@ -173,6 +210,16 @@
     }
     totalSeconds.value = layoutTimeline(plan.value.waypoints, plan.value.walk).duration
     seed.value = Math.floor(Math.random() * 2 ** 31)
+    const pulse = VOICES[voiceId.value]?.style === 'pulse'
+    driftBpm.value = pulse ? effectiveBpm.value : undefined
+    const stages: Stage[] = []
+    plan.value.waypoints.forEach((w, i) => {
+      const last = stages[stages.length - 1]
+      if (last && last.rung === w.rung) last.to = i
+      else stages.push({ mode: LADDER[w.rung], rung: w.rung, from: i, to: i })
+    })
+    layout = layoutTimeline(plan.value.waypoints, plan.value.walk)
+    info.value = { key: NOTE_NAMES[plan.value.tonic ?? 0], stages, bpm: driftBpm.value, seed: `seed ${seed.value}` }
     session.value++
     audioActive.value = true
     drifting.value = true
@@ -182,13 +229,44 @@
       words.length === 1
         ? `in ${words[0]}`
         : `from ${words[0]}${words.length > 2 ? ` through ${words.slice(1, -1).join(', ')}` : ''} to ${words[words.length - 1]}`
-    say(`Drifting ${route} ${lengthName(minutes.value)}.`)
+    say(
+      `Drifting ${route} ${lengthName(minutes.value)}, in ${NOTE_NAMES[plan.value.tonic ?? 0]}${driftBpm.value ? `, ${driftBpm.value} beats per minute` : ''}.`
+    )
   }
 
   function onProgress(newPosition: number, _text: number, seconds: number) {
     position.value = newPosition
     elapsed.value = seconds
   }
+
+  // The mode sounding now: the first waypoint's, moved by every ladder step made so far.
+  const rungNow = computed(() => {
+    if (!layout || !plan.value) return -1
+    return plan.value.waypoints[0].rung + layout.flips.reduce((r, f) => (f.time <= elapsed.value ? r + f.dir : r), 0)
+  })
+  // Which label to mark: among the stages in this mode, the one nearest the travelling point.
+  // While passing through a mode that is not a stop (a long walk), nothing is marked.
+  const activeStage = computed(() => {
+    if (!info.value) return -1
+    let best = -1
+    let gap = Infinity
+    info.value.stages.forEach((st, i) => {
+      if (st.rung !== rungNow.value) return
+      const d = position.value < st.from ? st.from - position.value : position.value > st.to ? position.value - st.to : 0
+      if (d < gap) {
+        gap = d
+        best = i
+      }
+    })
+    return best
+  })
+  // between two stops a long walk passes through modes that have no label: say which
+  const passing = computed(() =>
+    drifting.value && info.value && activeStage.value < 0 && rungNow.value >= 0 ? `passing ${LADDER[rungNow.value]}` : '\u00a0'
+  )
+  watch(activeStage, (i, before) => {
+    if (drifting.value && i >= 0 && i !== before && info.value) say(`Now in ${info.value.stages[i].mode}.`)
+  })
 
   function finish(announce: string) {
     drifting.value = false
@@ -230,6 +308,7 @@
   const vars = (i: { ink: string; contrast: string }) => ({ '--ink': i.ink, '--ink-contrast': i.contrast })
 
   const hint = computed(() => {
+    if (info.value) return ''
     if (drifting.value) return ''
     if (!points.value.length) return 'touch where you are'
     if (points.value.length === 1) return 'now where you would like to be, or begin'
@@ -256,7 +335,19 @@
       @clear="clear"
       @preview="preview = $event" />
 
-    <p class="hint" :style="vars(topInk)" aria-hidden="true">{{ hint }}</p>
+    <p class="hint" :style="vars(topInk)" aria-hidden="true">
+      {{ hint }}
+      <template v-if="info">
+        {{ info.key }} ·
+        <template v-for="(st, i) in info.stages" :key="i">
+          <span class="mode" :class="{ on: i === activeStage }">{{ st.mode }}</span>
+          <template v-if="i < info.stages.length - 1"> → </template>
+        </template>
+        <template v-if="info.bpm"> · {{ info.bpm }} BPM</template>
+        <span class="seed">{{ info.seed }}</span>
+        <span class="seed passing">{{ passing }}</span>
+      </template>
+    </p>
 
     <div :style="vars(bottomInk)">
       <button
@@ -277,9 +368,12 @@
         class="side right"
         :model-value="voiceId"
         :tempo="tempoFeel"
+        :bpm="effectiveBpm"
+        :custom-bpm="customBpm !== null"
         :disabled="drifting"
         @update:model-value="chooseVoice"
-        @update:tempo="chooseTempo" />
+        @update:tempo="chooseTempo"
+        @update:bpm="chooseBpm" />
     </div>
 
     <GenerativePlayer
@@ -288,6 +382,7 @@
       ref="playerRef"
       :plan="plan"
       :seed="seed"
+      :bpm="driftBpm"
       @progress="onProgress"
       @ended="onEnded" />
 
@@ -370,6 +465,31 @@
   }
   .field-app .side.right {
     left: calc(50% + 100px);
+  }
+
+  /* the mode sounding now is ringed; the others keep their full contrast, only unmarked */
+  .field-app .hint .mode {
+    display: inline-block;
+    padding: 1px 9px;
+    margin: 0 2px;
+    border-radius: 999px;
+    border: 1.5px solid transparent;
+    transition: border-color 1.5s ease, background-color 1.5s ease;
+  }
+  .field-app .hint .mode.on {
+    border-color: var(--ink);
+    background: color-mix(in srgb, var(--ink) 14%, transparent);
+  }
+
+  .field-app .hint .seed.passing {
+    margin-top: 0;
+  }
+  .field-app .hint .seed {
+    display: block;
+    margin-top: 2px;
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    opacity: 0.7;
   }
 
   .field-app .sr-only {
