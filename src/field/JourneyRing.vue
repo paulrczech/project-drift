@@ -1,11 +1,11 @@
 <script setup lang="ts">
+  import { LENGTHS } from './lengths'
   import { computed, nextTick, ref } from 'vue'
 
   // The ring: five stops around a centre button. Choosing one sets how long the whole
   // drift lasts (∞ never ends). The centre begins the drift; once it is under way the
   // stops fall away, the centre becomes "end", and the ring fills as time passes.
 
-  const LENGTHS = [1, 4, 7, 10, Infinity]
 
   const props = defineProps<{
     modelValue: number // minutes; Infinity for no end

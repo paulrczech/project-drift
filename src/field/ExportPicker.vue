@@ -1,51 +1,82 @@
 <script setup lang="ts">
-  import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+  import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
-  // "export": a quiet word under "sound" that opens a short list of ways to take the journey
-  // away — a MIDI file for a DAW, and (soon) the audio itself. Enabled once a drift has begun,
-  // because that is when its key, tempo and seed exist.
+  // "file": a quiet word under "sound" that opens the ways to take a journey away (MIDI for a DAW,
+  // the audio, a project file that can be opened again) and to open a project. The saves need a
+  // journey that has begun, because that is when its key, tempo and seed exist; the audio also
+  // waits until nothing is playing.
 
-  defineProps<{
-    enabled: boolean
-    busy: string // '' when idle, else what is being made ("rendering…")
-    wavReady: boolean // the audio can only be rendered once nothing is playing
+  const props = defineProps<{
+    hasJourney: boolean
+    playing: boolean // sound is playing (or still fading out)
+    busy: string // '' when idle, else what is being made ("rendering 30%")
   }>()
-  const emit = defineEmits<{ (e: 'midi'): void; (e: 'wav'): void }>()
+  const emit = defineEmits<{
+    (e: 'midi'): void
+    (e: 'wav'): void
+    (e: 'save'): void
+    (e: 'open', text: string): void
+  }>()
 
   const open = ref(false)
-  const root = ref<HTMLElement | null>(null)
+  const wrap = ref<HTMLElement | null>(null)
   const toggle = ref<HTMLElement | null>(null)
-  const items = ref<HTMLElement[]>([])
+  const items = ref<HTMLButtonElement[]>([])
+  const picker = ref<HTMLInputElement | null>(null)
+
+  const idle = computed(() => props.busy === '')
+  const canSave = computed(() => props.hasJourney && idle.value)
+  const canAudio = computed(() => props.hasJourney && idle.value && !props.playing)
+  const canOpen = computed(() => idle.value && !props.playing)
 
   async function show() {
     open.value = true
     await nextTick()
-    items.value[0]?.focus()
+    items.value.find((b) => b && !b.disabled)?.focus()
   }
   function hide(returnFocus = true) {
     open.value = false
     if (returnFocus) toggle.value?.focus()
   }
-  function choose(kind: 'midi' | 'wav') {
+  function choose(kind: 'midi' | 'wav' | 'save') {
     if (kind === 'midi') emit('midi')
-    else emit('wav')
+    else if (kind === 'wav') emit('wav')
+    else emit('save')
+    hide()
+  }
+  function chooseFile() {
+    picker.value?.click() // the system file chooser; its result arrives in onFile
+  }
+  async function onFile(ev: Event) {
+    const input = ev.target as HTMLInputElement
+    const file = input.files?.[0]
+    input.value = '' // so the same file can be opened twice
+    if (!file) return
+    emit('open', await file.text())
     hide()
   }
   function onKey(ev: KeyboardEvent) {
     if (ev.key === 'Escape') {
       ev.preventDefault()
       hide()
+      return
     }
+    const step = ev.key === 'ArrowDown' ? 1 : ev.key === 'ArrowUp' ? -1 : 0
+    if (!step) return
+    ev.preventDefault()
+    const live = items.value.filter((b) => b && !b.disabled)
+    const at = live.indexOf(document.activeElement as HTMLButtonElement)
+    live[(at + step + live.length) % live.length]?.focus()
   }
   function outside(ev: PointerEvent) {
-    if (open.value && root.value && !root.value.contains(ev.target as Node)) hide(false)
+    if (open.value && wrap.value && !wrap.value.contains(ev.target as Node)) hide(false)
   }
   onMounted(() => document.addEventListener('pointerdown', outside))
   onBeforeUnmount(() => document.removeEventListener('pointerdown', outside))
 </script>
 
 <template>
-  <div ref="root" class="export">
+  <div ref="wrap" class="export">
     <button
       ref="toggle"
       class="toggle"
@@ -53,30 +84,30 @@
       aria-haspopup="true"
       :aria-expanded="open"
       aria-controls="export-list"
-      :disabled="!enabled"
+      :disabled="!idle && !open"
       @click="open ? hide(false) : show()">
-      {{ busy || 'export' }}
+      {{ busy || 'file' }}
     </button>
 
     <div v-show="open" id="export-list" class="list" @keydown="onKey">
-      <button
-        :ref="(el) => el && (items[0] = el as HTMLElement)"
-        class="option"
-        type="button"
-        :disabled="busy !== ''"
-        @click="choose('midi')">
+      <button :ref="(el) => el && (items[0] = el as HTMLButtonElement)" class="option" type="button" :disabled="!canSave" @click="choose('midi')">
         <span class="name">MIDI</span>
         <span class="note">for a DAW</span>
       </button>
-      <button
-        :ref="(el) => el && (items[1] = el as HTMLElement)"
-        class="option"
-        type="button"
-        :disabled="busy !== '' || !wavReady"
-        @click="choose('wav')">
+      <button :ref="(el) => el && (items[1] = el as HTMLButtonElement)" class="option" type="button" :disabled="!canAudio" @click="choose('wav')">
         <span class="name">WAV</span>
-        <span class="note">{{ wavReady ? 'audio' : 'when stopped' }}</span>
+        <span class="note">{{ !hasJourney || !playing ? 'audio' : 'when stopped' }}</span>
       </button>
+      <button :ref="(el) => el && (items[2] = el as HTMLButtonElement)" class="option" type="button" :disabled="!canSave" @click="choose('save')">
+        <span class="name">project</span>
+        <span class="note">to reopen</span>
+      </button>
+      <hr />
+      <button :ref="(el) => el && (items[3] = el as HTMLButtonElement)" class="option" type="button" :disabled="!canOpen" @click="chooseFile">
+        <span class="name">open project</span>
+        <span class="note">{{ playing ? 'when stopped' : '' }}</span>
+      </button>
+      <input ref="picker" class="file" type="file" accept=".json,application/json" tabindex="-1" aria-hidden="true" @change="onFile" />
     </div>
   </div>
 </template>
@@ -124,7 +155,7 @@
     right: 0;
     bottom: calc(100% + 6px);
     display: grid;
-    min-width: 168px;
+    min-width: 200px;
     max-width: calc(100vw - 24px);
     padding: 6px;
     border-radius: 14px;
@@ -135,6 +166,12 @@
     color: var(--ink);
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
+  }
+  hr {
+    width: 100%;
+    margin: 4px 0;
+    border: 0;
+    border-top: 1px solid color-mix(in srgb, var(--ink) 25%, transparent);
   }
 
   .option {
@@ -161,5 +198,12 @@
   /* dim by size, not by transparency: faded text fails contrast */
   .note {
     font-size: 0.68rem;
+  }
+  .file {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
   }
 </style>

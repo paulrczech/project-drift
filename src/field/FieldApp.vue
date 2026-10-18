@@ -9,6 +9,8 @@
   import { NOTE_NAMES, scoreFor } from '../engine/score'
   import { download, exportName, midiBytes } from './exportMidi'
   import { renderDriftWav } from '../engine/render'
+  import { LENGTHS } from './lengths'
+  import { parseProject, toProject } from './project'
   import {
     describe,
     paletteAt,
@@ -110,6 +112,8 @@
     minutes: number
     key: string
     modes: string[]
+    points: Point[]
+    words: string[]
   } | null = null
   const exporting = ref('') // what is being made right now (shown on the export word)
 
@@ -142,7 +146,10 @@
     m === Infinity ? 'with no end' : m === 1 ? 'for 1 minute' : `for ${m} minutes`
 
   // ── choosing ────────────────────────────────────────────────────────────────────────
+  // a seed from an opened project, used by the next Begin only (any edit to the journey drops it)
+  let seedOverride: number | null = null
   function reset() {
+    seedOverride = null
     position.value = 0
     elapsed.value = 0
     info.value = null
@@ -228,13 +235,14 @@
   function begin() {
     if (!points.value.length || drifting.value) return
     clearTimeout(audioTeardown)
+    const forcedSeed = seedOverride
     reset()
     plan.value = {
       ...planFor(points.value, minutes.value),
       tonic: rootChoice.value ?? Math.floor(Math.random() * 12), // auto: a fresh key each drift
     }
     totalSeconds.value = layoutTimeline(plan.value.waypoints, plan.value.walk).duration
-    seed.value = Math.floor(Math.random() * 2 ** 31)
+    seed.value = forcedSeed ?? Math.floor(Math.random() * 2 ** 31)
     const pulse = VOICES[voiceId.value]?.style === 'pulse'
     driftBpm.value = pulse ? effectiveBpm.value : undefined
     const stages: Stage[] = []
@@ -254,6 +262,8 @@
       minutes: minutes.value,
       key: info.value.key,
       modes: stages.map((st) => st.mode),
+      points: points.value.map((p) => ({ ...p })),
+      words: points.value.map(wordFor),
     }
     session.value++
     audioActive.value = true
@@ -272,6 +282,49 @@
   function onProgress(newPosition: number, _text: number, seconds: number) {
     position.value = newPosition
     elapsed.value = seconds
+  }
+
+  function saveProject() {
+    if (!lastDrift) return
+    const d = lastDrift
+    const project = toProject({
+      points: d.points,
+      words: d.words,
+      minutes: d.minutes,
+      root: d.plan.tonic ?? 0,
+      voice: d.voiceId,
+      bpm: d.bpm,
+      seed: d.seed,
+      modes: d.modes,
+    })
+    const name = exportName(d.key, d.modes, d.bpm, 'drift.json')
+    download(new TextEncoder().encode(JSON.stringify(project, null, 2) + '\n'), name, 'application/json')
+    say(`Project saved: ${d.key} ${d.modes.join(' to ')}.`)
+  }
+
+  // Opening a project sets up the journey as it was (its seed is used by the next Begin). The
+  // sound, tempo and key are the project's for this visit only: they do not replace the listener's
+  // remembered choices.
+  function openProject(text: string) {
+    if (drifting.value || audioActive.value) return
+    const r = parseProject(text, { lengths: LENGTHS, maxStops: MAX_POINTS })
+    if (!r.ok) {
+      say(r.reason)
+      return
+    }
+    const p = r.project
+    reset()
+    points.value = p.stops.map((s) => ({ v: s.v, a: s.a }))
+    minutes.value = p.minutes
+    rootChoice.value = p.root
+    if (VOICES[p.voice]) {
+      voiceId.value = p.voice
+      preloadVoice(VOICES[p.voice])
+    }
+    customBpm.value = p.bpm === null ? null : p.bpm
+    warmUp()
+    seedOverride = p.seed
+    say(`Project opened: ${p.stops.length === 1 ? '1 stop' : `${p.stops.length} stops`}, ${NOTE_NAMES[p.root]}. Press begin.`)
   }
 
   async function exportMidi() {
@@ -453,11 +506,13 @@
         @update:root="chooseRoot" />
       <ExportPicker
         class="side right low"
-        :enabled="!!info"
+        :has-journey="!!info"
+        :playing="audioActive"
         :busy="exporting"
-        :wav-ready="!audioActive"
         @midi="exportMidi"
-        @wav="exportWav" />
+        @wav="exportWav"
+        @save="saveProject"
+        @open="openProject" />
     </div>
 
     <GenerativePlayer
@@ -514,7 +569,14 @@
     box-sizing: border-box;
     text-wrap: balance;
   }
+  /* the prompts beside the "words" button must not run under it on a phone */
   @media (max-width: 640px) {
+    .field-app .hint:not(.journey) {
+      left: 80px;
+      right: 12px;
+      font-size: 0.78rem;
+      letter-spacing: 0.08em;
+    }
     .field-app .hint.journey {
       top: calc(70px + env(safe-area-inset-top, 0px));
     }
