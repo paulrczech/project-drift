@@ -8,6 +8,7 @@
   import ExportPicker from './ExportPicker.vue'
   import { NOTE_NAMES, scoreFor } from '../engine/score'
   import { download, exportName, midiBytes } from './exportMidi'
+  import { zipStored, type ZipFile } from './zip'
   import { renderDriftWav } from '../engine/render'
   import { LENGTHS } from './lengths'
   import { parseProject, toProject } from './project'
@@ -435,6 +436,45 @@
     }
   }
 
+  // Several seeds of this journey in one zip: the same stops, key, tempo, length and sound, a
+  // different seed in each, so the files fit together in a DAW (the modes change at the same
+  // moments in all of them) without repeating each other's notes. The seeds run on from this
+  // drift's own, so the first file is what was just heard.
+  async function exportVariations(count: number, format: 'mid' | 'wav') {
+    if (!lastDrift || exporting.value || (format === 'wav' && audioActive.value)) return
+    const d = lastDrift
+    const voice = VOICES[d.voiceId]
+    const files: ZipFile[] = []
+    const tempo = { bpm: d.bpm, grid: d.grid, density: d.density }
+    exporting.value = format === 'wav' ? 'loading…' : 'saving…'
+    say(format === 'wav' ? `Rendering ${count} variations. This can take a while.` : `Making ${count} variations.`)
+    try {
+      for (let k = 0; k < count; k++) {
+        const seed = (d.seed + k) % 2 ** 31
+        const of = `${k + 1}/${count}`
+        let bytes: Uint8Array
+        if (format === 'mid') {
+          exporting.value = `saving ${of}`
+          await new Promise((r) => setTimeout(r)) // let the label show
+          const score = scoreFor(voice, d.plan, seed, tempo)
+          bytes = await midiBytes(score, { voice: voice.label, seed, stops: d.stops, minutes: d.minutes, feel: d.grid && d.density ? `${GRID_LABEL[d.grid]} ${d.density}` : undefined })
+        } else {
+          bytes = await renderDriftWav(voice, d.plan, seed, tempo, (p) => {
+            exporting.value = p.stage === 'loading' ? 'loading…' : `rendering ${of} ${Math.round(p.done * 100)}%`
+          })
+        }
+        files.push({ name: exportName(d.head, d.modes, d.bpm, format, `${d.voiceId}-seed${seed}`), data: bytes })
+      }
+      const name = exportName(d.head, d.modes, d.bpm, 'zip', `${d.voiceId}-${count}-seeds`)
+      download(zipStored(files), name, 'application/zip')
+      say(`${count} variations saved: ${d.head ? d.head + ' ' : ''}${d.modes.join(' to ')}.`)
+    } catch {
+      say('Sorry, the variations could not be made.')
+    } finally {
+      exporting.value = ''
+    }
+  }
+
   // The mode and key sounding now: the start, moved by every step made so far.
   const nowState = computed(() => (layout.value ? stateAt(layout.value, elapsed.value) : null))
   // Which label to mark: among the stages in this mode and key, the one nearest the travelling
@@ -667,6 +707,7 @@
         @midi="exportMidi"
         @wav="exportWav"
         @save="saveProject"
+        @variations="exportVariations"
         @open="openProject" />
     </div>
 

@@ -38,17 +38,17 @@ export async function midiBytes(score: Score, info: Provenance): Promise<Uint8Ar
 }
 
 // e.g. drift-A-phrygian-to-lydian-72bpm.mid, or drift-D-dorian-to-Ab-major-to-C-lydian.mid when the
-// journey changes key (`head` is the key a file name begins with, empty then; the BPM only where
-// the sound has one)
-export const exportName = (head: string, modes: string[], bpm: number | undefined, ext: string) =>
+// journey changes key (`head` is the key a file name begins with, empty then; the BPM where there
+// is one; `tag` tells the files of a set of variations apart, e.g. "pad-seed5000")
+export const exportName = (head: string, modes: string[], bpm: number | undefined, ext: string, tag?: string) =>
   ['drift', head, modes.join('-to-')]
     .filter(Boolean)
     .join('-')
     .replace(/\s+/g, '-')
-    .replace('#', 'sharp') + `${bpm ? `-${bpm}bpm` : ''}.${ext}`
+    .replace('#', 'sharp') + `${bpm ? `-${bpm}bpm` : ''}${tag ? `-${tag}` : ''}.${ext}`
 
-export function download(bytes: Uint8Array, filename: string, mime: string) {
-  const url = URL.createObjectURL(new Blob([bytes.buffer as ArrayBuffer], { type: mime }))
+export function download(bytes: Uint8Array | Blob, filename: string, mime: string) {
+  const url = URL.createObjectURL(bytes instanceof Blob ? bytes : new Blob([bytes.buffer as ArrayBuffer], { type: mime }))
   const a = document.createElement('a')
   a.href = url
   a.download = filename

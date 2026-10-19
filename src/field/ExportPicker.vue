@@ -1,5 +1,6 @@
 <script setup lang="ts">
-  import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+  import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+  import ChoicePicker from './ChoicePicker.vue'
 
   // "file": a quiet word under "sound" that opens the ways to take a journey away (MIDI for a DAW,
   // the audio, a project file that can be opened again) and to open a project. The saves need a
@@ -15,8 +16,20 @@
     (e: 'midi'): void
     (e: 'wav'): void
     (e: 'save'): void
+    (e: 'variations', count: number, format: 'mid' | 'wav'): void
     (e: 'open', text: string): void
   }>()
+
+  // Variations: several seeds of the journey in one zip. MIDI is quick; each WAV is large, so fewer.
+  const MAX_WAV = 4
+  const moreOpen = ref(false)
+  const count = ref(4)
+  const format = ref<'mid' | 'wav'>('mid')
+  const counts = computed(() => [2, 3, 4, 6, 8].filter((n) => format.value === 'mid' || n <= MAX_WAV))
+  watch(format, () => {
+    if (!counts.value.includes(count.value)) count.value = MAX_WAV
+  })
+  const canVariations = computed(() => (format.value === 'wav' ? canAudio.value : canSave.value))
 
   const open = ref(false)
   const wrap = ref<HTMLElement | null>(null)
@@ -29,10 +42,13 @@
   const canAudio = computed(() => props.hasJourney && idle.value && !props.playing)
   const canOpen = computed(() => idle.value && !props.playing)
 
+  // the items that can take focus: not disabled, and showing (the variations panel may be closed)
+  const reachable = () => items.value.filter((b) => b && !b.disabled && b.offsetParent !== null)
+
   async function show() {
     open.value = true
     await nextTick()
-    items.value.find((b) => b && !b.disabled)?.focus()
+    reachable()[0]?.focus()
   }
   function hide(returnFocus = true) {
     open.value = false
@@ -55,7 +71,12 @@
     emit('open', await file.text())
     hide()
   }
+  function saveVariations() {
+    emit('variations', count.value, format.value)
+    hide()
+  }
   function onKey(ev: KeyboardEvent) {
+    if (ev.target instanceof HTMLSelectElement && ev.key !== 'Escape') return // a select keeps its own arrows
     if (ev.key === 'Escape') {
       ev.preventDefault()
       hide()
@@ -64,7 +85,7 @@
     const step = ev.key === 'ArrowDown' ? 1 : ev.key === 'ArrowUp' ? -1 : 0
     if (!step) return
     ev.preventDefault()
-    const live = items.value.filter((b) => b && !b.disabled)
+    const live = reachable()
     const at = live.indexOf(document.activeElement as HTMLButtonElement)
     live[(at + step + live.length) % live.length]?.focus()
   }
@@ -102,8 +123,41 @@
         <span class="name">project</span>
         <span class="note">to reopen</span>
       </button>
+      <button
+        :ref="(el) => el && (items[3] = el as HTMLButtonElement)"
+        class="option"
+        type="button"
+        aria-controls="variations-panel"
+        :aria-expanded="moreOpen"
+        :disabled="!hasJourney"
+        @click="moreOpen = !moreOpen">
+        <span class="name">variations</span>
+        <span class="note">seeds in a zip</span>
+      </button>
+      <div v-show="moreOpen && hasJourney" id="variations-panel" class="more">
+        <label class="more-row">
+          <span>seeds</span>
+          <ChoicePicker
+            :model-value="String(count)"
+            :options="counts.map((n) => ({ value: String(n), label: String(n) }))"
+            label="Number of seeds"
+            @update:model-value="count = Number($event)" />
+        </label>
+        <label class="more-row">
+          <span>as</span>
+          <ChoicePicker
+            :model-value="format"
+            :options="[{ value: 'mid', label: 'MIDI' }, { value: 'wav', label: 'WAV' }]"
+            label="Format"
+            @update:model-value="format = $event as 'mid' | 'wav'" />
+        </label>
+        <button :ref="(el) => el && (items[4] = el as HTMLButtonElement)" class="option" type="button" :disabled="!canVariations" @click="saveVariations">
+          <span class="name">save zip</span>
+          <span class="note">{{ format === 'wav' && playing ? 'when stopped' : '' }}</span>
+        </button>
+      </div>
       <hr />
-      <button :ref="(el) => el && (items[3] = el as HTMLButtonElement)" class="option" type="button" :disabled="!canOpen" @click="chooseFile">
+      <button :ref="(el) => el && (items[5] = el as HTMLButtonElement)" class="option" type="button" :disabled="!canOpen" @click="chooseFile">
         <span class="name">open project</span>
         <span class="note">{{ playing ? 'when stopped' : '' }}</span>
       </button>
@@ -198,6 +252,19 @@
   /* dim by size, not by transparency: faded text fails contrast */
   .note {
     font-size: 0.68rem;
+  }
+  .more {
+    display: grid;
+    gap: 4px;
+    padding: 4px 6px 6px 12px;
+  }
+  .more-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    font-size: 0.78rem;
+    letter-spacing: 0.06em;
   }
   .file {
     position: absolute;
