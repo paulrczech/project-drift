@@ -20,17 +20,21 @@
   } from './moodPlane'
   import { rungFor } from '../engine/moods'
   import { layoutTimeline, stateAt, type Layout, type TimelinePlan } from '../engine/compose'
-  import { TEMPO_FEEL, clampBpm, defaultBpm } from '../engine/pulse'
+  import { GRID_LABEL, GRID_NAME, TEMPO_FEEL, clampBpm, defaultBpm, type Density, type Grid } from '../engine/pulse'
   import { LADDER } from '../engine/drift'
 
   import {
     VOICES,
     currentCustomBpm,
+    currentDensity,
+    currentGrid,
     currentRoot,
     currentTempoFeel,
     currentVoiceId,
     preloadVoice,
     rememberCustomBpm,
+    rememberDensity,
+    rememberGrid,
     rememberRoot,
     rememberTempoFeel,
     rememberVoice,
@@ -83,6 +87,22 @@
   }
   const driftBpm = ref<number | undefined>(undefined) // the tempo this drift was started with
 
+  // The pulse's grid (steps per beat) and density (how many of the weak steps sound), fixed for the journey.
+  const gridChoice = ref<Grid>(currentGrid())
+  const densityChoice = ref<Density>(currentDensity())
+  function chooseGrid(grid: Grid) {
+    gridChoice.value = grid
+    rememberGrid(grid)
+    say(`Grid: ${GRID_NAME[grid]}.`)
+  }
+  function chooseDensity(density: Density) {
+    densityChoice.value = density
+    rememberDensity(density)
+    say(`Notes: ${density}.`)
+  }
+  const driftGrid = ref<Grid | undefined>(undefined) // what this drift was started with
+  const driftDensity = ref<Density | undefined>(undefined)
+
   // The key: a root the listener chose (kept between visits), or auto — a new one each drift.
   const rootChoice = ref<number | null>(currentRoot())
   function chooseRoot(root: number | null) {
@@ -110,6 +130,8 @@
     plan: TimelinePlan
     seed: number
     bpm?: number
+    grid?: Grid
+    density?: Density
     stops: string
     minutes: number
     key: string // the key it starts in
@@ -199,6 +221,13 @@
     fieldRef.value?.focus() // the button is about to go quiet; keep the keyboard somewhere useful
   }
 
+  // what a stop carries besides where it sits: its key, grid and density, if it has its own
+  const settingsOf = (q: Point) => ({
+    ...(q.key === undefined ? {} : { key: q.key }),
+    ...(q.grid === undefined ? {} : { grid: q.grid }),
+    ...(q.density === undefined ? {} : { density: q.density }),
+  })
+
   // the word lists: set a stop, add the next, or take one away
   function setFromWords(index: number, p: Point | null) {
     if (drifting.value) return
@@ -210,7 +239,7 @@
       return
     }
     if (index < points.value.length)
-      points.value = points.value.map((q, k) => (k === index ? (q.key === undefined ? p : { ...p, key: q.key }) : q))
+      points.value = points.value.map((q, k) => (k === index ? { ...p, ...settingsOf(q) } : q))
     else if (index === points.value.length && index < MAX_POINTS) points.value = [...points.value, p]
     say(`${index === 0 ? 'Where you are' : ordinal(index + 1)}: ${wordFor(p)}.`)
   }
@@ -223,7 +252,13 @@
   function planFor(pts: Point[], m: number, tonics: number[]) {
     const endless = m === Infinity
     const total = (endless ? 10 : m) * 60
-    const moods = pts.map((p, i) => ({ rung: rungFor(p.v), arousal: p.a, tonic: tonics[i] }))
+    // a later stop may set the pulse's grid and density; the first stop's are the sound menu's (the plan's)
+    const moods = pts.map((p, i) => ({
+      rung: rungFor(p.v),
+      arousal: p.a,
+      tonic: tonics[i],
+      ...(i > 0 ? { grid: p.grid, density: p.density } : {}),
+    }))
     const n = moods.length
     if (n === 1) return { waypoints: [{ ...moods[0], hold: endless ? Infinity : total }], walk: 0 }
     const leg = (total * 0.55) / (n - 1 + 0.3 * (n - 2))
@@ -252,6 +287,8 @@
     seed.value = forcedSeed ?? Math.floor(Math.random() * 2 ** 31)
     const pulse = VOICES[voiceId.value]?.style === 'pulse'
     driftBpm.value = pulse ? effectiveBpm.value : undefined
+    driftGrid.value = pulse ? gridChoice.value : undefined
+    driftDensity.value = pulse ? densityChoice.value : undefined
     const uniform = tonics.every((t) => t === tonics[0])
     const stages: Stage[] = []
     plan.value.waypoints.forEach((w, i) => {
@@ -269,6 +306,8 @@
       plan: plan.value,
       seed: seed.value,
       bpm: driftBpm.value,
+      grid: driftGrid.value,
+      density: driftDensity.value,
       stops: points.value.map(wordFor).join(' > '),
       minutes: minutes.value,
       key: info.value.key,
@@ -306,6 +345,8 @@
       root: d.plan.tonic ?? 0,
       voice: d.voiceId,
       bpm: d.bpm,
+      grid: d.grid,
+      density: d.density,
       seed: d.seed,
       modes: d.modes,
     })
@@ -326,7 +367,7 @@
     }
     const p = r.project
     reset()
-    points.value = p.stops.map((s) => (s.key === undefined ? { v: s.v, a: s.a } : { v: s.v, a: s.a, key: s.key }))
+    points.value = p.stops.map((s) => ({ v: s.v, a: s.a, ...settingsOf(s) }))
     minutes.value = p.minutes
     rootChoice.value = p.root
     if (VOICES[p.voice]) {
@@ -334,6 +375,8 @@
       preloadVoice(VOICES[p.voice])
     }
     customBpm.value = p.bpm === null ? null : p.bpm
+    if (p.grid) gridChoice.value = p.grid
+    if (p.density) densityChoice.value = p.density
     warmUp()
     seedOverride = p.seed
     say(`Project opened: ${p.stops.length === 1 ? '1 stop' : `${p.stops.length} stops`}, ${NOTE_NAMES[p.root]}. Press begin.`)
@@ -344,8 +387,8 @@
     exporting.value = 'saving…'
     try {
       const d = lastDrift
-      const score = scoreFor(VOICES[d.voiceId], d.plan, d.seed, { bpm: d.bpm })
-      const bytes = await midiBytes(score, { voice: VOICES[d.voiceId].label, seed: d.seed, stops: d.stops, minutes: d.minutes })
+      const score = scoreFor(VOICES[d.voiceId], d.plan, d.seed, { bpm: d.bpm, grid: d.grid, density: d.density })
+      const bytes = await midiBytes(score, { voice: VOICES[d.voiceId].label, seed: d.seed, stops: d.stops, minutes: d.minutes, feel: d.grid && d.density ? `${GRID_LABEL[d.grid]} ${d.density}` : undefined })
       download(bytes, exportName(d.head, d.modes, d.bpm, 'mid'), 'audio/midi')
       say(`MIDI file saved: ${d.head ? d.head + ' ' : ''}${d.modes.join(' to ')}.`)
     } catch {
@@ -364,7 +407,7 @@
     try {
       const d = lastDrift
       const voice = VOICES[d.voiceId]
-      const bytes = await renderDriftWav(voice, d.plan, d.seed, { bpm: d.bpm }, (p) => {
+      const bytes = await renderDriftWav(voice, d.plan, d.seed, { bpm: d.bpm, grid: d.grid, density: d.density }, (p) => {
         exporting.value = p.stage === 'loading' ? 'loading…' : `rendering ${Math.round(p.done * 100)}%`
       })
       download(bytes, exportName(d.head, d.modes, d.bpm, 'wav'), 'audio/wav')
@@ -427,6 +470,37 @@
     say(`Stop ${i + 1}: ${key === null ? 'the same key as before' : NOTE_NAMES[key]}.`)
   }
 
+  // ── a stop's grid and density (the pulse) ─────────────────────────────────────────────
+  // As with the key: the first stop's are the sound menu's; a later stop's are its own, or none,
+  // which keeps the stop before's. The grid changes once, midway along the walk to the stop;
+  // the density eases along it.
+  const isPulse = computed(() => VOICES[voiceId.value]?.style === 'pulse')
+  const stopGrids = computed<(Grid | null)[]>(() => [gridChoice.value, ...points.value.slice(1).map((p) => p.grid ?? null)])
+  const stopDensities = computed<(Density | null)[]>(() => [
+    densityChoice.value,
+    ...points.value.slice(1).map((p) => p.density ?? null),
+  ])
+  function setStopFeel(i: number, field: 'grid' | 'density', value: Grid | Density | null) {
+    if (drifting.value || i >= points.value.length) return
+    if (i === 0) {
+      if (value === null) return
+      if (field === 'grid') chooseGrid(value as Grid)
+      else chooseDensity(value as Density)
+      return
+    }
+    reset()
+    points.value = points.value.map((p, k) => {
+      if (k !== i) return p
+      const { [field]: _gone, ...rest } = p
+      return value === null ? rest : { ...rest, [field]: value }
+    })
+    const what = field === 'grid' ? 'Grid' : 'Notes'
+    const shown = value === null ? 'the same as before' : field === 'grid' ? GRID_NAME[value as Grid] : value
+    say(`Stop ${i + 1}: ${what} ${shown}.`)
+  }
+  const setStopGrid = (i: number, g: Grid | null) => setStopFeel(i, 'grid', g)
+  const setStopDensity = (i: number, d: Density | null) => setStopFeel(i, 'density', d)
+
   function finish(announce: string) {
     drifting.value = false
     // unmount after the audio has finished fading, or it is cut mid-fade
@@ -487,10 +561,15 @@
       <WordsFallback
         :points="points"
         :keys="stopKeys"
+        :grids="stopGrids"
+        :densities="stopDensities"
+        :pulse="isPulse"
         :drifting="drifting"
         :max="MAX_POINTS"
         @set="setFromWords"
-        @key="setStopKey" />
+        @key="setStopKey"
+        @grid="setStopGrid"
+        @density="setStopDensity" />
     </div>
 
     <MoodField
@@ -499,9 +578,14 @@
       :travel="drifting ? position : null"
       :drifting="drifting"
       :keys="stopKeys"
+      :grids="stopGrids"
+      :densities="stopDensities"
+      :pulse="isPulse"
       @choose="choose"
       @remove="remove"
       @key="setStopKey"
+      @grid="setStopGrid"
+      @density="setStopDensity"
       @clear="clear"
       @preview="preview = $event" />
 
@@ -540,11 +624,15 @@
         :tempo="tempoFeel"
         :bpm="effectiveBpm"
         :custom-bpm="customBpm !== null"
+        :grid="gridChoice"
+        :density="densityChoice"
         :root="rootChoice"
         :disabled="drifting"
         @update:model-value="chooseVoice"
         @update:tempo="chooseTempo"
         @update:bpm="chooseBpm"
+        @update:grid="chooseGrid"
+        @update:density="chooseDensity"
         @update:root="chooseRoot" />
       <ExportPicker
         class="side right low"
@@ -564,6 +652,8 @@
       :plan="plan"
       :seed="seed"
       :bpm="driftBpm"
+      :grid="driftGrid"
+      :density="driftDensity"
       @progress="onProgress"
       @ended="onEnded" />
 

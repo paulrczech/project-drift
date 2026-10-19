@@ -16,7 +16,7 @@
 import { ENDLESS_TAIL } from './score'
 import { arousalAt, type TimelinePlan } from './compose'
 import { mulberry } from './rng'
-import { performerFor } from './performer'
+import { performerFor, type Tempo } from './performer'
 import { routeNote, type Voice } from './voices'
 
 const VELOCITY = 0.8 // as the player
@@ -32,7 +32,7 @@ export async function renderDriftWav(
   voice: Voice,
   plan: Omit<TimelinePlan, 'rng'>,
   seed: number,
-  tempo: { bpm?: number } = {},
+  tempo: Tempo = {},
   progress: (p: RenderProgress) => void = () => {},
   assets = '', // a prefix for the sample URLs (the offline harness serves /public from a folder)
   cut: { segment?: number; pre?: number } = {} // for tests

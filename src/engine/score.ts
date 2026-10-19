@@ -4,9 +4,9 @@
 
 import { LADDER } from './drift'
 import { Composer, arousalAt, stateAt, type TimelinePlan } from './compose'
-import { PulseComposer, START } from './pulse'
+import { GRID_LABEL, PulseComposer, START } from './pulse'
 import { mulberry } from './rng'
-import { performerFor } from './performer'
+import { performerFor, type Tempo } from './performer'
 import { routeNote, type Voice } from './voices'
 
 export interface ScoreNote {
@@ -62,7 +62,7 @@ export function scoreFor(
   voice: Voice,
   plan: Omit<TimelinePlan, 'rng'>,
   seed: number,
-  tempo: { bpm?: number } = {}
+  tempo: Tempo = {}
 ): Score {
   // a finite copy of the plan
   const waypoints = plan.waypoints.map((w) => ({ ...w, hold: Number.isFinite(w.hold) ? w.hold : ENDLESS_TAIL }))
@@ -129,6 +129,10 @@ export function scoreFor(
     if (f.time - last.time < 1e-6) last.text = text
     else markers.push({ time: f.time, text })
   }
+  // where a pulse changes its grid
+  if (performer instanceof PulseComposer)
+    for (const sw of performer.switches) markers.push({ time: Math.max(0, sw.time - START), text: `grid ${GRID_LABEL[sw.grid]}` })
+  markers.sort((a, b) => a.time - b.time)
   const modes = waypoints.map((w, i) => name(w.rung, layout.tonics[i])).filter((m, i, a) => m !== a[i - 1])
   return { bpm, tracks, markers, duration: layout.duration, key: NOTE_NAMES[layout.tonic0], uniformKey, modes }
 }

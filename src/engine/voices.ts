@@ -8,6 +8,8 @@
 //
 // The pad is the default; the sound selector (and `?voice=pad|choir|choir-mixed|orchestra|pulse`) picks another.
 
+import { DEFAULT_DENSITY, DEFAULT_GRID, DENSITIES, GRIDS, type Density, type Grid } from './pulse'
+
 export interface Layer {
   id: string
   baseUrl: string
@@ -295,6 +297,46 @@ export function currentCustomBpm(): number | null {
 export function rememberCustomBpm(bpm: number) {
   try {
     window.localStorage.setItem(BPM_KEY, String(bpm))
+  } catch {
+    /* applies to this visit only */
+  }
+}
+
+// The pulse's grid and density, remembered like its tempo.
+const GRID_KEY = 'drift.grid'
+const DENSITY_KEY = 'drift.density'
+
+export function currentGrid(): Grid {
+  try {
+    const n = Number(window.localStorage.getItem(GRID_KEY))
+    if (GRIDS.includes(n as Grid)) return n as Grid
+  } catch {
+    /* default */
+  }
+  return DEFAULT_GRID
+}
+
+export function rememberGrid(grid: Grid) {
+  try {
+    window.localStorage.setItem(GRID_KEY, String(grid))
+  } catch {
+    /* applies to this visit only */
+  }
+}
+
+export function currentDensity(): Density {
+  try {
+    const d = window.localStorage.getItem(DENSITY_KEY)
+    if (DENSITIES.includes(d as Density)) return d as Density
+  } catch {
+    /* default */
+  }
+  return DEFAULT_DENSITY
+}
+
+export function rememberDensity(density: Density) {
+  try {
+    window.localStorage.setItem(DENSITY_KEY, density)
   } catch {
     /* applies to this visit only */
   }

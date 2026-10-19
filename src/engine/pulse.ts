@@ -2,10 +2,12 @@
 // free time, this keeps a quiet, steady pulse — a short cell of notes that repeats, like the
 // patterns of Reich, Glass or Pärt's tintinnabuli, but generated as the journey goes.
 //
-// THE CELL. Eight steps (an eighth note each), repeated. The strong steps (0, 2, 4, 6) play the
-// chord's tones in an arpeggio; the weak steps (1, 3, 5, 7) are mostly rests, with a few scale
-// steps passing between the chord tones. Arousal sets how many weak steps sound (a sparse cell
-// when still, a fuller one when energised) and the tempo. Everything sits in a warm register,
+// THE CELL. One bar of four beats, each divided into `grid` steps (1 = quarters, 2 = eighths,
+// 3 = eighth triplets, 4 = sixteenths; eighths are the default), repeated. The strong steps (the
+// beats) play the chord's tones in an arpeggio; the weak steps between them are mostly rests, with
+// a few scale steps passing between the chord tones. How many weak steps sound is the DENSITY:
+// by default arousal sets it (a sparse cell when still, a fuller one when energised), or the
+// listener fixes it (sparse / medium / full, which is every step). Arousal also sets the tempo. Everything sits in a warm register,
 // C3 to C5, and every note belongs to the current mode by construction. The TEMPO IS FIXED for
 // the whole journey (a constant grid is what a DAW export needs, and it keeps the echo steady):
 // by default it comes from the journey's mean arousal; the listener can scale it (slow / medium /
@@ -64,9 +66,31 @@ export interface PulsePlan extends VoiceParams {
   walk: number | number[]
   bpm?: number // the fixed tempo; by default `defaultBpm` of the journey, scaled by `tempoScale`
   tempoScale?: number // from TEMPO_FEEL
+  grid?: Grid // steps per beat; default 2 (eighths)
+  density?: Density // how many weak steps sound; default 'auto' (from arousal)
 }
 
-const CELL = 8 // steps in the cell
+// Steps per beat: the cell is one bar of four beats.
+export const GRIDS = [1, 2, 3, 4] as const
+export type Grid = (typeof GRIDS)[number]
+export const DEFAULT_GRID: Grid = 2
+// as a DAW's grid menu names them, and as a person might hear them
+export const GRID_LABEL: Record<Grid, string> = { 1: '1/4', 2: '1/8', 3: '1/8T', 4: '1/16' }
+export const GRID_NAME: Record<Grid, string> = { 1: 'quarter notes', 2: 'eighth notes', 3: 'eighth-note triplets', 4: 'sixteenth notes' }
+
+// Density: the share of the cell's steps that sound. 'auto' follows arousal, as the pulse always
+// has (at most three quarters of the steps). Each stop may set its own grid and density: the
+// grid changes once, at the middle of the walk to that stop (on the next phrase line, so a bar is
+// never cut short); the density eases along the walk. The beats always sound, so the quarter grid has
+// nothing to vary. At 'full' no step is left silent: where no scale step lies between two chord
+// tones, the step plays the tone's upper neighbour (and the tone again after it).
+export const DENSITIES = ['auto', 'sparse', 'medium', 'full'] as const
+export type Density = (typeof DENSITIES)[number]
+export const DEFAULT_DENSITY: Density = 'auto'
+const SHARE = { sparse: 0.5, medium: 0.75, full: 1 } as const // full = every step: a continuous stream
+const AUTO_SHARE = [0.625, 0.75, 0.75] // by weakLevel(arousal): auto never fills the bar
+
+const BEATS = 4 // beats in the cell
 const PHRASE = 4 // cycles in a phrase
 const ROOT_NEAR = 53 // the tonic sits at B2-A#3; the cell spans about an octave and a half above it, within the samples (to C5)
 export const START = 0.3 // seconds before the first pulse
@@ -83,8 +107,17 @@ const TEMPLATES = [
   [0, 1, 2, 3],
   [0, 2, 3, 2],
 ]
-// Which weak steps sound, by how energised the music is.
-const WEAK_STEPS = [[5], [3, 7], [1, 3, 5]]
+// Which weak steps sound on the eighth grid, by how many (kept as they were, so default journeys
+// are unchanged). Other grids spread them evenly through the bar.
+const WEAK_EIGHTHS: Record<number, number[]> = { 0: [], 1: [5], 2: [3, 7], 3: [1, 3, 5] }
+
+// The `n` weak steps of a cell that sound: evenly spread through its weak steps.
+function weakSteps(grid: number, n: number): number[] {
+  if (grid === 2 && n in WEAK_EIGHTHS) return WEAK_EIGHTHS[n]
+  const weak: number[] = []
+  for (let i = 0; i < BEATS * grid; i++) if (i % grid !== 0) weak.push(i)
+  return Array.from({ length: n }, (_, j) => weak[Math.floor(((j + 0.5) * weak.length) / n)])
+}
 
 const weakLevel = (arousal: number) => (arousal < 0.35 ? 0 : arousal < 0.65 ? 1 : 2)
 
@@ -116,15 +149,21 @@ export class PulseComposer {
   private nextFlip = 0
   private moveAt: number // when the next harmonic move happens
   private t = START // the next step
-  private k = 0 // steps so far
   private template: number[]
   private seed: number
 
   // the cell as it is being played, and how its notes are changing
+  private grids: Grid[] // per stop
+  private densities: Density[]
+  private grid: Grid // the grid being played
+  private pos = 0 // the step within the cell
+  private barAt = START // when the current cell began
+  readonly switches: { time: number; grid: Grid }[] = [] // where the grid changed, for the score's markers
+  private cellSteps: number // steps in the cell
   private shown: Cell = []
-  private leaving: boolean[] = Array(CELL).fill(false) // softening before a substitution
+  private leaving: boolean[] // softening before a substitution
   private planned: number[] = [] // positions to substitute at the next cycle
-  private arriving: number[] = Array(CELL).fill(1) // new notes ease in: 0.5, 0.75, 1
+  private arriving: number[] // new notes ease in: 0.5, 0.75, 1
   private playing: Cell = [] // this cycle's cell (with the phrase's variation)
   private cycle = -1
 
@@ -132,6 +171,19 @@ export class PulseComposer {
     this.rng = plan.rng ?? Math.random
     this.beat = plan.beat
     this.bpm = clampBpm(plan.bpm ?? defaultBpm(plan.waypoints, plan.tempoScale ?? 1))
+    // each stop's grid and density: its own, else the stop before's, else the plan's
+    const grid0 = GRIDS.includes(plan.grid as Grid) ? (plan.grid as Grid) : DEFAULT_GRID
+    const density0 = DENSITIES.includes(plan.density as Density) ? (plan.density as Density) : DEFAULT_DENSITY
+    this.grids = []
+    this.densities = []
+    plan.waypoints.forEach((w, i) => {
+      this.grids.push(GRIDS.includes(w.grid as Grid) ? (w.grid as Grid) : i ? this.grids[i - 1] : grid0)
+      this.densities.push(DENSITIES.includes(w.density as Density) ? (w.density as Density) : i ? this.densities[i - 1] : density0)
+    })
+    this.grid = this.grids[0]
+    this.cellSteps = BEATS * this.grid
+    this.leaving = Array(this.cellSteps).fill(false)
+    this.arriving = Array(this.cellSteps).fill(1)
     this.layout = layoutTimeline(plan.waypoints, plan.walk, plan.tonic)
     this.flips = this.layout.flips
     this.engine = new DriftEngine({
@@ -193,25 +245,87 @@ export class PulseComposer {
     return tones.sort((a, b) => a - b)
   }
 
-  // A scale step that truly passes between two chord tones, nearest the one it leaves; none
-  // if they are adjacent (the step stays a rest). If the two are the same note, a neighbour above.
-  private passing(from: number, to: number, scale: number[]): number | null {
-    if (from === to) return scale.find((n) => n > from) ?? null
+  // The scale steps that truly pass between two chord tones, in the order they are met leaving
+  // the first; none if the tones are adjacent (the steps stay rests). If the two are the same
+  // note, a neighbour above.
+  private passing(from: number, to: number, scale: number[]): number[] {
+    if (from === to) {
+      const above = scale.find((n) => n > from)
+      return above === undefined ? [] : [above]
+    }
     const between = scale.filter((n) => (to > from ? n > from && n < to : n > to && n < from))
-    if (!between.length) return null
-    return to > from ? between[0] : between[between.length - 1]
+    return to > from ? between : between.reverse()
+  }
+
+  // A figure around a chord tone for a step with nothing to pass through: its upper neighbour
+  // (the lower if that would climb out of the register), then the tone itself.
+  private neighbour(tone: number, k: number, scale: number[]): number | null {
+    if (k % 2 === 1) return tone
+    const up = scale.find((n) => n > tone)
+    if (up !== undefined && up <= 76) return up
+    return [...scale].reverse().find((n) => n < tone) ?? null
+  }
+
+  // The grid at time t: a stop's own from the middle of the walk to it.
+  private gridAt(t: number): Grid {
+    let g = this.grids[0]
+    this.layout.walks.forEach((w, i) => {
+      if (t >= (w.start + w.end) / 2) g = this.grids[i + 1]
+    })
+    return g
+  }
+
+  // The share of steps that sound at time t: a stop's density, easing along each walk to the next.
+  private shareAt(t: number): number {
+    const of = (d: Density) => (d === 'auto' ? AUTO_SHARE[weakLevel(this.engine.arousal)] : SHARE[d])
+    const { walks } = this.layout
+    for (let i = 0; i < walks.length; i++) {
+      const w = walks[i]
+      if (t < w.start) return of(this.densities[i])
+      if (t < w.end) {
+        const from = of(this.densities[i])
+        const to = of(this.densities[i + 1])
+        return from + (to - from) * ((t - w.start) / (w.end - w.start))
+      }
+    }
+    return of(this.densities[this.densities.length - 1])
+  }
+
+  // How many of the cell's weak steps sound: the density's share of the whole cell, less the beats.
+  private weakCount(): number {
+    const weak = this.cellSteps - BEATS
+    return Math.min(weak, Math.max(0, Math.round(this.shareAt(this.barAt) * this.cellSteps) - BEATS))
+  }
+
+  // A new grid takes over on a phrase line. The beats keep their notes; the steps between begin
+  // soft and ease in over the next bars.
+  private switchGrid(grid: Grid) {
+    const old = this.grid
+    this.switches.push({ time: this.barAt, grid })
+    const kept = Array.from({ length: BEATS }, (_, b) => this.shown[b * old] ?? null)
+    this.grid = grid
+    this.cellSteps = BEATS * grid
+    this.shown = this.targetCell()
+    kept.forEach((note, b) => note !== null && (this.shown[b * grid] = note))
+    this.leaving = Array(this.cellSteps).fill(false)
+    this.planned = []
+    this.arriving = Array.from({ length: this.cellSteps }, (_, j) => (j % grid === 0 ? 1 : 0.25))
   }
 
   private targetCell(): Cell {
     const tones = this.chordTones()
     const scale = getScaleNotes(this.engine.tonic, LADDER[this.engine.rung], 36, 90)
-    const cell: Cell = Array(CELL).fill(null)
+    const g = this.grid
+    const cell: Cell = Array(this.cellSteps).fill(null)
     const strong = this.template.map((idx) => tones[idx % tones.length])
-    strong.forEach((note, i) => (cell[i * 2] = note))
-    for (const step of WEAK_STEPS[weakLevel(this.engine.arousal)]) {
-      const from = strong[(step - 1) / 2]
-      const to = strong[((step + 1) / 2) % 4]
-      cell[step] = this.passing(from, to, scale)
+    strong.forEach((note, beat) => (cell[beat * g] = note))
+    const n = this.weakCount()
+    const fill = n === this.cellSteps - BEATS && n > 0 // every step sounds: none is left silent
+    for (const step of weakSteps(g, n)) {
+      const beat = Math.floor(step / g)
+      const between = this.passing(strong[beat], strong[(beat + 1) % BEATS], scale)
+      const k = (step % g) - 1 // the first weak step of a beat takes the nearest passing tone, then on towards the next
+      cell[step] = between[k] ?? (fill ? this.neighbour(strong[beat], k, scale) : null)
     }
     return cell
   }
@@ -230,7 +344,7 @@ export class PulseComposer {
       this.shown = target
     } else {
       // notes that arrived earlier ease in a little more (0.5 -> 0.75 -> 1)...
-      for (let j = 0; j < CELL; j++) if (this.arriving[j] < 1) this.arriving[j] = Math.min(1, this.arriving[j] + 0.25)
+      for (let j = 0; j < this.cellSteps; j++) if (this.arriving[j] < 1) this.arriving[j] = Math.min(1, this.arriving[j] + 0.25)
       // ...and the substitutions planned last cycle take place now, the new notes starting soft
       for (const j of this.planned) {
         this.shown[j] = target[j]
@@ -240,12 +354,12 @@ export class PulseComposer {
 
       // what no longer fits? notes outside the mode first, then the rest, a few at a time
       const diffs: number[] = []
-      for (let j = 0; j < CELL; j++) if (this.shown[j] !== target[j]) diffs.push(j)
+      for (let j = 0; j < this.cellSteps; j++) if (this.shown[j] !== target[j]) diffs.push(j)
       const bad = (j: number) => (this.shown[j] !== null && !this.inMode(this.shown[j] as number) ? 0 : 1)
       diffs.sort((a, b) => bad(a) - bad(b) || a - b)
       const take = Math.max(1, Math.ceil(diffs.length / 3))
       this.planned = diffs.slice(0, take)
-      this.leaving = Array(CELL).fill(false)
+      this.leaving = Array(this.cellSteps).fill(false)
       for (const j of this.planned) this.leaving[j] = true
     }
 
@@ -254,11 +368,13 @@ export class PulseComposer {
     const phrase = Math.floor(this.cycle / PHRASE)
     if (this.cycle % PHRASE === PHRASE - 1) {
       const v = Math.floor(unit(this.seed, phrase) * 4)
-      if (v === 1 && this.playing[6] !== null && (this.playing[6] as number) + 12 <= 76) this.playing[6] = (this.playing[6] as number) + 12 // lift
-      if (v === 2) this.playing[4] = null // a breath
-      if (v === 3 && this.playing[0] !== null) {
+      const g = this.grid
+      const lift = 3 * g // the last beat
+      if (v === 1 && this.playing[lift] !== null && (this.playing[lift] as number) + 12 <= 76) this.playing[lift] = (this.playing[lift] as number) + 12 // lift
+      if (v === 2) this.playing[2 * g] = null // a breath
+      if (v === 3 && g > 1 && this.playing[0] !== null) {
         const scale = getScaleNotes(this.engine.tonic, LADDER[this.engine.rung], 36, 90)
-        this.playing[7] = scale.find((n) => n > (this.playing[0] as number)) ?? null // a turn back to the start
+        this.playing[this.cellSteps - 1] = scale.find((n) => n > (this.playing[0] as number)) ?? null // a turn back to the start
       }
     }
   }
@@ -279,18 +395,25 @@ export class PulseComposer {
     while (this.t < end) {
       const t = this.t
       this.harmonyAt(t)
-      const stepInCycle = this.k % CELL
+      if (this.pos === this.cellSteps) this.pos = 0
+      if (this.pos === 0) {
+        this.barAt = t
+        const next = this.gridAt(t)
+        if (this.cycle >= 0 && (this.cycle + 1) % PHRASE === 0 && next !== this.grid) this.switchGrid(next)
+      }
+      const g = this.grid
+      const stepInCycle = this.pos
       if (stepInCycle === 0) this.startCycle()
-      const step = 30 / this.bpm // an eighth note, constant
+      const step = 60 / (this.bpm * g) // a step, constant
 
       let note = this.playing[stepInCycle]
       // near the end of a finite journey the cell thins: passing notes go, then the upper chord tones
       const f = Number.isFinite(d) ? t / d : 0
-      if (note !== null && f > 0.78 && stepInCycle % 2 === 1) note = null
-      if (note !== null && f > 0.88 && stepInCycle !== 0 && stepInCycle !== 4) note = null
+      if (note !== null && f > 0.78 && stepInCycle % g !== 0) note = null
+      if (note !== null && f > 0.88 && stepInCycle !== 0 && stepInCycle !== 2 * g) note = null
 
       if (note !== null) {
-        const role = stepInCycle === 0 ? 1 : stepInCycle % 2 === 0 ? 0.82 : 0.6
+        const role = stepInCycle === 0 ? 1 : stepInCycle % g === 0 ? 0.82 : 0.6
         let v = role * this.arc(t) * this.arriving[stepInCycle]
         if (this.leaving[stepInCycle]) v *= 0.5
         if (!this.inMode(note)) v *= 0.55 // a note the mode no longer wants: kept quiet until replaced
@@ -304,7 +427,7 @@ export class PulseComposer {
           cycle: this.cycle,
         })
       }
-      this.k++
+      this.pos++
       this.t += step
     }
     return out

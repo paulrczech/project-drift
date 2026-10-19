@@ -2,7 +2,7 @@
   import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
   import { LISTED_VOICES, VOICES, type TempoFeelName } from '../engine/voices'
   import KeyPicker from './KeyPicker.vue'
-  import { BPM_MAX, BPM_MIN, clampBpm } from '../engine/pulse'
+  import { BPM_MAX, BPM_MIN, DENSITIES, GRIDS, GRID_LABEL, GRID_NAME, clampBpm, type Density, type Grid } from '../engine/pulse'
 
   // "sound": a quiet word beside the ring that opens a short list of voices. Choosing one
   // applies to the next drift (the stops are the same: this only changes what plays them).
@@ -12,6 +12,8 @@
     tempo: TempoFeelName // slow / medium / fast, for the pulse
     bpm: number // the tempo in effect (from the feel, or typed)
     customBpm: boolean // an exact BPM was typed, so no feel is chosen
+    grid: Grid // the pulse's steps per beat
+    density: Density // how many of the pulse's weak steps sound
     root: number | null // the key chosen (0 = C … 11 = B), or null for a new one each drift
     disabled: boolean
   }>()
@@ -20,6 +22,8 @@
     (e: 'update:modelValue', id: string): void
     (e: 'update:tempo', feel: TempoFeelName): void
     (e: 'update:bpm', bpm: number): void
+    (e: 'update:grid', grid: Grid): void
+    (e: 'update:density', density: Density): void
     (e: 'update:root', root: number | null): void
   }>()
 
@@ -43,6 +47,10 @@
     }
   }
   const feelRefs = ref<HTMLElement[]>([])
+  const gridRefs = ref<HTMLElement[]>([])
+  const densityRefs = ref<HTMLElement[]>([])
+  // the quarter grid has only the beats, so there is no density to choose
+  const noDensity = () => props.grid === 1
 
   const open = ref(false)
   const wrap = ref<HTMLElement | null>(null)
@@ -83,8 +91,8 @@
     items.value[(i + step + LISTED_VOICES.length) % LISTED_VOICES.length]?.focus()
   }
 
-  // the tempo chips: arrows move and choose, as in any radio group
-  async function onFeelKey(ev: KeyboardEvent, i: number) {
+  // a row of chips (tempo, grid, density): arrows move and choose, as in any radio group
+  async function onChipKey<T>(ev: KeyboardEvent, i: number, list: readonly T[], pick: (v: T) => void, refs: HTMLElement[]) {
     if (ev.key === 'Escape') {
       ev.preventDefault()
       hide()
@@ -93,10 +101,10 @@
     const step = ev.key === 'ArrowRight' || ev.key === 'ArrowDown' ? 1 : ev.key === 'ArrowLeft' || ev.key === 'ArrowUp' ? -1 : 0
     if (!step) return
     ev.preventDefault()
-    const next = (i + step + FEELS.length) % FEELS.length
-    emit('update:tempo', FEELS[next])
+    const next = (i + step + list.length) % list.length
+    pick(list[next])
     await nextTick()
-    feelRefs.value[next]?.focus()
+    refs[next]?.focus()
   }
 
   // a tap or click anywhere else closes it
@@ -159,7 +167,7 @@
           :tabindex="feelStop(f) ? 0 : -1"
           type="button"
           @click="emit('update:tempo', f)"
-          @keydown="onFeelKey($event, i)">
+          @keydown="onChipKey($event, i, FEELS, (v) => emit('update:tempo', v), feelRefs)">
           {{ f }}
         </button>
         <label class="bpm">
@@ -175,6 +183,42 @@
             @keydown="bpmKey" />
           <span aria-hidden="true">BPM</span>
         </label>
+      </div>
+      <div v-if="isPulse()" class="tempo row" role="radiogroup" aria-label="Grid">
+        <span class="tempo-label" aria-hidden="true">grid</span>
+        <button
+          v-for="(g, i) in GRIDS"
+          :key="g"
+          :ref="(el) => el && (gridRefs[i] = el as HTMLElement)"
+          class="chip"
+          :class="{ on: g === grid }"
+          role="radio"
+          :aria-checked="g === grid"
+          :aria-label="GRID_NAME[g]"
+          :tabindex="g === grid ? 0 : -1"
+          type="button"
+          @click="emit('update:grid', g)"
+          @keydown="onChipKey($event, i, GRIDS, (v) => emit('update:grid', v), gridRefs)">
+          {{ GRID_LABEL[g] }}
+        </button>
+      </div>
+      <div v-if="isPulse()" class="tempo row" role="radiogroup" aria-label="Notes">
+        <span class="tempo-label" aria-hidden="true">notes</span>
+        <button
+          v-for="(d, i) in DENSITIES"
+          :key="d"
+          :ref="(el) => el && (densityRefs[i] = el as HTMLElement)"
+          class="chip"
+          :class="{ on: d === density }"
+          role="radio"
+          :aria-checked="d === density"
+          :tabindex="d === density ? 0 : -1"
+          :disabled="noDensity()"
+          type="button"
+          @click="emit('update:density', d)"
+          @keydown="onChipKey($event, i, DENSITIES, (v) => emit('update:density', v), densityRefs)">
+          {{ d }}
+        </button>
       </div>
       <div class="tempo keyrow">
         <label class="tempo-label" for="drift-key">key</label>
@@ -351,6 +395,11 @@
   .bpm input:focus-visible {
     outline: 2px solid var(--ink);
     outline-offset: 2px;
+  }
+  .row {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
   }
   .keyrow {
     margin-top: 12px;

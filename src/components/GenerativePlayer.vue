@@ -10,11 +10,14 @@
   import { routeNote, voiceFromLocation } from '../engine/voices'
   import { mulberry } from '../engine/rng'
   import { performerFor, type Performer } from '../engine/performer'
+  import type { Density, Grid } from '../engine/pulse'
 
   interface Props {
     plan: Omit<TimelinePlan, 'rng'>
     seed: number
     bpm?: number // the pulse's fixed tempo (other voices play in free time)
+    grid?: Grid // the pulse's steps per beat
+    density?: Density // how many of the pulse's weak steps sound
   }
 
   const props = defineProps<Props>()
@@ -148,7 +151,7 @@
     )
     if (halted) return
 
-    composer = performerFor(voice, props.plan, mulberry(props.seed), { bpm: props.bpm })
+    composer = performerFor(voice, props.plan, mulberry(props.seed), { bpm: props.bpm, grid: props.grid, density: props.density })
     t0 = Tone.now() + 0.3
     master.gain.setValueAtTime(0, Tone.now())
     master.gain.linearRampToValueAtTime(LEVEL, t0 + FADE)

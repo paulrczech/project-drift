@@ -1,7 +1,9 @@
 <script setup lang="ts">
   import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
   import KeyPicker from './KeyPicker.vue'
+  import ChoicePicker from './ChoicePicker.vue'
   import { NOTE_NAMES } from '../engine/score'
+  import { DENSITIES, GRIDS, GRID_LABEL, type Density, type Grid } from '../engine/pulse'
   import {
     EMOTIONS,
     describe,
@@ -22,12 +24,17 @@
     travel: number | null // fractional position along `points` while drifting, else null
     drifting: boolean
     keys: (number | null)[] // per stop: its key, or null (the first: auto; later: the same as before)
+    grids: (Grid | null)[] // per stop: the pulse's grid, or null (later stops: the same as before)
+    densities: (Density | null)[]
+    pulse: boolean // the sound is the pulse, so a stop can set its grid and density
   }>()
 
   const emit = defineEmits<{
     (e: 'choose', point: Point): void
     (e: 'remove', index: number): void
     (e: 'key', index: number, key: number | null): void
+    (e: 'grid', index: number, grid: Grid | null): void
+    (e: 'density', index: number, density: Density | null): void
     (e: 'clear'): void
     (e: 'preview', point: Point | null): void
   }>()
@@ -175,6 +182,7 @@
   const markerRefs = new Map<number, HTMLElement>()
   const bubble = ref<HTMLElement | null>(null)
   const BUBBLE_W = 210
+  const ROW = 56 // a row of the bubble: a 44 px control and its gap
   const bubbleAt = ref({ left: 0, top: 0 })
 
   async function openBubble(i: number) {
@@ -186,7 +194,7 @@
     const y = (1 - p.a) * r.height
     // beside the marker, kept on screen; above it when it sits low, so the ring stays clear
     const left = Math.min(Math.max(x - BUBBLE_W / 2, 8 - r.left), window.innerWidth - r.left - BUBBLE_W - 8)
-    bubbleAt.value = { left, top: p.a < 0.4 ? y - 34 - 132 : y + 34 }
+    bubbleAt.value = { left, top: p.a < 0.4 ? y - 34 - (props.pulse ? 132 + 2 * ROW : 132) : y + 34 }
     await nextTick()
     bubble.value?.querySelector<HTMLElement>('select')?.focus()
   }
@@ -284,7 +292,7 @@
         class="marker"
         :class="{ destination: points.length > 1 && i === points.length - 1 }"
         :style="pos(p)"
-        :aria-label="`${markerName(i)}: ${labelFor(p)}${keyTag(i)}. Press for its key, or to remove it.`"
+        :aria-label="`${markerName(i)}: ${labelFor(p)}${keyTag(i)}. Press for its settings, or to remove it.`"
         aria-haspopup="dialog"
         :aria-expanded="editing === i"
         :disabled="drifting"
@@ -319,6 +327,26 @@
             :label="`Key for stop ${editing + 1}`"
             @update:model-value="emit('key', editing, $event)" />
         </label>
+        <template v-if="pulse">
+          <label class="bubble-row">
+            <span>grid</span>
+            <ChoicePicker
+              :model-value="grids[editing] === null || grids[editing] === undefined ? null : String(grids[editing])"
+              :options="GRIDS.map((g) => ({ value: String(g), label: GRID_LABEL[g] }))"
+              :neutral="editing === 0 ? undefined : 'same'"
+              :label="`Grid for stop ${editing + 1}`"
+              @update:model-value="emit('grid', editing, $event === null ? null : (Number($event) as Grid))" />
+          </label>
+          <label class="bubble-row">
+            <span>notes</span>
+            <ChoicePicker
+              :model-value="densities[editing] ?? null"
+              :options="DENSITIES.map((d) => ({ value: d, label: d }))"
+              :neutral="editing === 0 ? undefined : 'same'"
+              :label="`Notes for stop ${editing + 1}`"
+              @update:model-value="emit('density', editing, $event as Density | null)" />
+          </label>
+        </template>
         <button class="bubble-remove" type="button" @click="removeEditing">remove this stop</button>
       </div>
 

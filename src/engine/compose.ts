@@ -10,6 +10,7 @@
 // (settle in the final mode until stopped); a finite plan can also be composed in one go
 // with `composeTimeline`.
 
+import type { Density, Grid } from './pulse'
 import { DEFAULT_TONIC, DriftEngine, beatFor, type Move, type Rung } from './drift'
 
 export interface NoteEvent {
@@ -42,6 +43,9 @@ export interface Waypoint {
   tonic?: number // pitch class of this stop's key; left out, it is the previous stop's (the first: the plan's)
   hold: number
   arousal?: number // 0 still … 1 energised (default 0.4)
+  // the pulse's feel at this stop; left out, the stop before's (the first: the plan's)
+  grid?: Grid
+  density?: Density
 }
 
 export interface TimelinePlan {

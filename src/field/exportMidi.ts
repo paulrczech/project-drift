@@ -9,6 +9,7 @@ export interface Provenance {
   seed: number
   stops: string // e.g. "sad > nostalgic > joyful" (MIDI text is ASCII)
   minutes: number // Infinity for an endless drift
+  feel?: string // the pulse's grid and density, e.g. "1/8T full"
 }
 
 export async function midiBytes(score: Score, info: Provenance): Promise<Uint8Array> {
@@ -22,7 +23,7 @@ export async function midiBytes(score: Score, info: Provenance): Promise<Uint8Ar
   midi.header.update()
 
   const ticks = (s: number) => Math.round(midi.header.secondsToTicks(s))
-  const first = `Drift | ${score.key} | ${info.stops} | ${score.bpm} BPM | ${info.voice} | seed ${info.seed}`
+  const first = `Drift | ${score.key} | ${info.stops} | ${score.bpm} BPM${info.feel ? ' ' + info.feel : ''} | ${info.voice} | seed ${info.seed}`
   score.markers.forEach((m, i) =>
     midi.header.meta.push({ ticks: ticks(m.time), type: 'marker', text: i === 0 ? `${first} | ${m.text}` : m.text })
   )

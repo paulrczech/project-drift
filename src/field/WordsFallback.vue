@@ -2,6 +2,8 @@
   import { ref } from 'vue'
   import { EMOTIONS, type Point } from './moodPlane'
   import KeyPicker from './KeyPicker.vue'
+  import ChoicePicker from './ChoicePicker.vue'
+  import { DENSITIES, GRIDS, GRID_LABEL, type Density, type Grid } from '../engine/pulse'
 
   // The fallback: the 21 words as plain dropdowns, one per stop of the journey, plus one more
   // to add the next stop. Anything the field can do by touch, pointer or arrow key, this can do
@@ -10,6 +12,9 @@
   const props = defineProps<{
     points: Point[]
     keys: (number | null)[] // each stop's key (the first: auto; later: null = the same as before)
+    grids: (Grid | null)[] // each stop's pulse grid (the first: the sound menu's; later: null = the same as before)
+    densities: (Density | null)[]
+    pulse: boolean // the sound is the pulse, so grid and density apply
     drifting: boolean
     max: number
   }>()
@@ -17,6 +22,8 @@
   const emit = defineEmits<{
     (e: 'set', index: number, point: Point | null): void
     (e: 'key', index: number, key: number | null): void
+    (e: 'grid', index: number, grid: Grid | null): void
+    (e: 'density', index: number, density: Density | null): void
   }>()
 
   const open = ref(false)
@@ -53,7 +60,7 @@
     </button>
 
     <div v-show="open" id="words-panel" class="panel">
-      <div v-for="i in slots()" :key="i" class="stop">
+      <div v-for="i in slots()" :key="i" class="stop" :class="{ feel: pulse && points[i] }">
         <label>
           <span>{{ caption(i) }}</span>
           <select
@@ -74,6 +81,24 @@
           :label="`Key for ${i === 0 ? 'where you are' : 'stop ' + (i + 1)}`"
           :disabled="drifting"
           @update:model-value="emit('key', i, $event)" />
+        <template v-if="pulse && points[i]">
+          <ChoicePicker
+            class="stop-key"
+            :model-value="grids[i] === null || grids[i] === undefined ? null : String(grids[i])"
+            :options="GRIDS.map((g) => ({ value: String(g), label: GRID_LABEL[g] }))"
+            :neutral="i === 0 ? undefined : 'same'"
+            :label="`Grid for ${i === 0 ? 'where you are' : 'stop ' + (i + 1)}`"
+            :disabled="drifting"
+            @update:model-value="emit('grid', i, $event === null ? null : (Number($event) as Grid))" />
+          <ChoicePicker
+            class="stop-key"
+            :model-value="densities[i] ?? null"
+            :options="DENSITIES.map((d) => ({ value: d, label: d }))"
+            :neutral="i === 0 ? undefined : 'same'"
+            :label="`Notes for ${i === 0 ? 'where you are' : 'stop ' + (i + 1)}`"
+            :disabled="drifting"
+            @update:model-value="emit('density', i, $event as Density | null)" />
+        </template>
       </div>
     </div>
   </div>
@@ -127,6 +152,7 @@
   }
   .stop {
     display: flex;
+    flex-wrap: wrap;
     align-items: flex-end;
     gap: 8px;
   }
@@ -137,6 +163,14 @@
   .stop-key {
     flex: none;
     min-width: 84px;
+  }
+  /* with the pulse's grid and density there are four controls: the word on its own row, the rest beneath */
+  .stop.feel label {
+    flex-basis: 100%;
+  }
+  .stop.feel .stop-key {
+    flex: 1 1 0;
+    min-width: 0;
   }
   label {
     display: grid;
