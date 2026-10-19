@@ -2,6 +2,7 @@
   import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
   import { LISTED_VOICES, VOICES, type TempoFeelName } from '../engine/voices'
   import KeyPicker from './KeyPicker.vue'
+  import { VARIATIONS, type Variation } from '../engine/compose'
   import { BPM_MAX, BPM_MIN, DENSITIES, GRIDS, GRID_LABEL, GRID_NAME, clampBpm, type Density, type Grid } from '../engine/pulse'
 
   // "sound": a quiet word beside the ring that opens a short list of voices. Choosing one
@@ -14,6 +15,7 @@
     customBpm: boolean // an exact BPM was typed, so no feel is chosen
     grid: Grid // the pulse's steps per beat
     density: Density // how many of the pulse's weak steps sound
+    variation: Variation // how much the music changes (every sound)
     root: number | null // the key chosen (0 = C … 11 = B), or null for a new one each drift
     disabled: boolean
   }>()
@@ -24,6 +26,7 @@
     (e: 'update:bpm', bpm: number): void
     (e: 'update:grid', grid: Grid): void
     (e: 'update:density', density: Density): void
+    (e: 'update:variation', variation: Variation): void
     (e: 'update:root', root: number | null): void
   }>()
 
@@ -49,6 +52,7 @@
   const feelRefs = ref<HTMLElement[]>([])
   const gridRefs = ref<HTMLElement[]>([])
   const densityRefs = ref<HTMLElement[]>([])
+  const variationRefs = ref<HTMLElement[]>([])
   // the quarter grid has only the beats, so there is no density to choose
   const noDensity = () => props.grid === 1
 
@@ -129,7 +133,7 @@
       sound
     </button>
 
-    <div v-show="open" id="sound-list" class="list" :class="{ wide: isPulse() }">
+    <div v-show="open" id="sound-list" class="list wide">
       <button class="close" type="button" aria-label="Close sound menu" @click="hide()">
         <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
           <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none" />
@@ -218,6 +222,23 @@
           @click="emit('update:density', d)"
           @keydown="onChipKey($event, i, DENSITIES, (v) => emit('update:density', v), densityRefs)">
           {{ d }}
+        </button>
+      </div>
+      <div class="tempo" :class="{ row: isPulse() }" role="radiogroup" aria-label="Variation: how much the music changes">
+        <span class="tempo-label" aria-hidden="true">change</span>
+        <button
+          v-for="(x, i) in VARIATIONS"
+          :key="x"
+          :ref="(el) => el && (variationRefs[i] = el as HTMLElement)"
+          class="chip"
+          :class="{ on: x === variation }"
+          role="radio"
+          :aria-checked="x === variation"
+          :tabindex="x === variation ? 0 : -1"
+          type="button"
+          @click="emit('update:variation', x)"
+          @keydown="onChipKey($event, i, VARIATIONS, (v) => emit('update:variation', v), variationRefs)">
+          {{ x }}
         </button>
       </div>
       <div class="tempo keyrow">

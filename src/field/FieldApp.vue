@@ -19,7 +19,7 @@
     type Point,
   } from './moodPlane'
   import { rungFor } from '../engine/moods'
-  import { layoutTimeline, stateAt, type Layout, type TimelinePlan } from '../engine/compose'
+  import { DEFAULT_VARIATION, layoutTimeline, stateAt, type Layout, type TimelinePlan, type Variation } from '../engine/compose'
   import { GRID_LABEL, GRID_NAME, TEMPO_FEEL, clampBpm, defaultBpm, type Density, type Grid } from '../engine/pulse'
   import { LADDER } from '../engine/drift'
 
@@ -30,6 +30,7 @@
     currentGrid,
     currentRoot,
     currentTempoFeel,
+    currentVariation,
     currentVoiceId,
     preloadVoice,
     rememberCustomBpm,
@@ -37,6 +38,7 @@
     rememberGrid,
     rememberRoot,
     rememberTempoFeel,
+    rememberVariation,
     rememberVoice,
     voiceFromLocation,
     type TempoFeelName,
@@ -99,6 +101,14 @@
     densityChoice.value = density
     rememberDensity(density)
     say(`Notes: ${density}.`)
+  }
+  // How much the music changes (every sound): the first stop's is the sound menu's, each later stop
+  // may set its own. It paces the harmony's moves and, for the pulse, its notes and phrases.
+  const variationChoice = ref<Variation>(currentVariation())
+  function chooseVariation(variation: Variation) {
+    variationChoice.value = variation
+    rememberVariation(variation)
+    say(`Variation: ${variation}.`)
   }
   const driftGrid = ref<Grid | undefined>(undefined) // what this drift was started with
   const driftDensity = ref<Density | undefined>(undefined)
@@ -221,11 +231,12 @@
     fieldRef.value?.focus() // the button is about to go quiet; keep the keyboard somewhere useful
   }
 
-  // what a stop carries besides where it sits: its key, grid and density, if it has its own
+  // what a stop carries besides where it sits: its key, grid, density and variation, if it has its own
   const settingsOf = (q: Point) => ({
     ...(q.key === undefined ? {} : { key: q.key }),
     ...(q.grid === undefined ? {} : { grid: q.grid }),
     ...(q.density === undefined ? {} : { density: q.density }),
+    ...(q.variation === undefined ? {} : { variation: q.variation }),
   })
 
   // the word lists: set a stop, add the next, or take one away
@@ -252,11 +263,12 @@
   function planFor(pts: Point[], m: number, tonics: number[]) {
     const endless = m === Infinity
     const total = (endless ? 10 : m) * 60
-    // a later stop may set the pulse's grid and density; the first stop's are the sound menu's (the plan's)
+    // a later stop may set the pulse's grid and density, and every sound's variation; the first stop's are the sound menu's
     const moods = pts.map((p, i) => ({
       rung: rungFor(p.v),
       arousal: p.a,
       tonic: tonics[i],
+      variation: i > 0 ? p.variation : variationChoice.value,
       ...(i > 0 ? { grid: p.grid, density: p.density } : {}),
     }))
     const n = moods.length
@@ -347,6 +359,7 @@
       bpm: d.bpm,
       grid: d.grid,
       density: d.density,
+      variation: d.plan.waypoints[0]?.variation ?? DEFAULT_VARIATION,
       seed: d.seed,
       modes: d.modes,
     })
@@ -377,6 +390,7 @@
     customBpm.value = p.bpm === null ? null : p.bpm
     if (p.grid) gridChoice.value = p.grid
     if (p.density) densityChoice.value = p.density
+    variationChoice.value = p.variation
     warmUp()
     seedOverride = p.seed
     say(`Project opened: ${p.stops.length === 1 ? '1 stop' : `${p.stops.length} stops`}, ${NOTE_NAMES[p.root]}. Press begin.`)
@@ -480,12 +494,13 @@
     densityChoice.value,
     ...points.value.slice(1).map((p) => p.density ?? null),
   ])
-  function setStopFeel(i: number, field: 'grid' | 'density', value: Grid | Density | null) {
+  function setStopFeel(i: number, field: 'grid' | 'density' | 'variation', value: Grid | Density | Variation | null) {
     if (drifting.value || i >= points.value.length) return
     if (i === 0) {
       if (value === null) return
       if (field === 'grid') chooseGrid(value as Grid)
-      else chooseDensity(value as Density)
+      else if (field === 'density') chooseDensity(value as Density)
+      else chooseVariation(value as Variation)
       return
     }
     reset()
@@ -494,12 +509,14 @@
       const { [field]: _gone, ...rest } = p
       return value === null ? rest : { ...rest, [field]: value }
     })
-    const what = field === 'grid' ? 'Grid' : 'Notes'
+    const what = field === 'grid' ? 'Grid' : field === 'density' ? 'Notes' : 'Variation'
     const shown = value === null ? 'the same as before' : field === 'grid' ? GRID_NAME[value as Grid] : value
     say(`Stop ${i + 1}: ${what} ${shown}.`)
   }
+  const stopVariations = computed<(Variation | null)[]>(() => [variationChoice.value, ...points.value.slice(1).map((p) => p.variation ?? null)])
   const setStopGrid = (i: number, g: Grid | null) => setStopFeel(i, 'grid', g)
   const setStopDensity = (i: number, d: Density | null) => setStopFeel(i, 'density', d)
+  const setStopVariation = (i: number, v: Variation | null) => setStopFeel(i, 'variation', v)
 
   function finish(announce: string) {
     drifting.value = false
@@ -563,13 +580,15 @@
         :keys="stopKeys"
         :grids="stopGrids"
         :densities="stopDensities"
+        :variations="stopVariations"
         :pulse="isPulse"
         :drifting="drifting"
         :max="MAX_POINTS"
         @set="setFromWords"
         @key="setStopKey"
         @grid="setStopGrid"
-        @density="setStopDensity" />
+        @density="setStopDensity"
+        @variation="setStopVariation" />
     </div>
 
     <MoodField
@@ -580,12 +599,14 @@
       :keys="stopKeys"
       :grids="stopGrids"
       :densities="stopDensities"
+      :variations="stopVariations"
       :pulse="isPulse"
       @choose="choose"
       @remove="remove"
       @key="setStopKey"
       @grid="setStopGrid"
       @density="setStopDensity"
+      @variation="setStopVariation"
       @clear="clear"
       @preview="preview = $event" />
 
@@ -626,6 +647,7 @@
         :custom-bpm="customBpm !== null"
         :grid="gridChoice"
         :density="densityChoice"
+        :variation="variationChoice"
         :root="rootChoice"
         :disabled="drifting"
         @update:model-value="chooseVoice"
@@ -633,6 +655,7 @@
         @update:bpm="chooseBpm"
         @update:grid="chooseGrid"
         @update:density="chooseDensity"
+        @update:variation="chooseVariation"
         @update:root="chooseRoot" />
       <ExportPicker
         class="side right low"

@@ -1,17 +1,19 @@
 // A journey as a small JSON file: enough to rebuild it exactly (the same stops, length, key, tempo,
 // sound and seed give the same music), and to open it again later or on another device.
 
+import { DEFAULT_VARIATION, VARIATIONS, type Variation } from '../engine/compose'
 import { BPM_MAX, BPM_MIN, DENSITIES, GRIDS, type Density, type Grid } from '../engine/pulse'
 import { NOTE_NAMES, SHARP_NAMES } from '../engine/score'
 
-export const PROJECT_VERSION = 2 // 2 adds the pulse's grid and density
+export const PROJECT_VERSION = 3 // 2 adds the pulse's grid and density; 3 adds each stop's variation
 
 export interface Project {
   drift: number // the file format's version
   // in journey order; `word` is only a label; `root` is the stop's key (0 = C … 11 = B), or null for
   // the same as the stop before (the first stop's is the project's `root`)
-  // and `grid` / `density` are the pulse's at that stop (null likewise; the first stop's are the project's)
-  stops: { valence: number; arousal: number; word: string; root: number | null; grid: Grid | null; density: Density | null }[]
+  // and `grid` / `density` are the pulse's at that stop (null likewise; the first stop's are the project's),
+  // and `variation` is how much the music changes there (the first stop's is always set; later null = the same)
+  stops: { valence: number; arousal: number; word: string; root: number | null; grid: Grid | null; density: Density | null; variation: Variation | null }[]
   minutes: number | 'endless'
   key: string // e.g. "F#" (informational; `root` is what is read)
   root: number // 0 = C … 11 = B
@@ -24,7 +26,8 @@ export interface Project {
 }
 
 export interface Opened {
-  stops: { v: number; a: number; key?: number; grid?: Grid; density?: Density }[]
+  stops: { v: number; a: number; key?: number; grid?: Grid; density?: Density; variation?: Variation }[]
+  variation: Variation // the first stop's
   minutes: number
   root: number
   voice: string
@@ -35,7 +38,7 @@ export interface Opened {
 }
 
 export function toProject(d: {
-  points: { v: number; a: number; key?: number; grid?: Grid; density?: Density }[]
+  points: { v: number; a: number; key?: number; grid?: Grid; density?: Density; variation?: Variation }[]
   words: string[]
   minutes: number
   root: number
@@ -43,6 +46,7 @@ export function toProject(d: {
   bpm?: number
   grid?: Grid
   density?: Density
+  variation: Variation // the first stop's
   seed: number
   modes: string[]
 }): Project {
@@ -55,6 +59,7 @@ export function toProject(d: {
       root: i === 0 ? d.root : p.key ?? null,
       grid: i === 0 ? d.grid ?? null : d.grid ? p.grid ?? null : null,
       density: i === 0 ? d.density ?? null : d.density ? p.density ?? null : null,
+      variation: i === 0 ? d.variation : p.variation ?? null,
     })),
     minutes: Number.isFinite(d.minutes) ? d.minutes : 'endless',
     key: NOTE_NAMES[d.root],
@@ -92,7 +97,10 @@ export function parseProject(
     key: i > 0 && Number.isInteger(s?.root) && s.root >= 0 && s.root <= 11 ? (s.root as number) : undefined,
     grid: i > 0 && GRIDS.includes(s?.grid) ? (s.grid as Grid) : undefined,
     density: i > 0 && DENSITIES.includes(s?.density) ? (s.density as Density) : undefined,
+    variation: i > 0 && VARIATIONS.includes(s?.variation) ? (s.variation as Variation) : undefined,
   }))
+  // the first stop's variation is the project's; files from before it was chosen moved gently
+  const variation = VARIATIONS.includes(raw.stops[0]?.variation) ? (raw.stops[0].variation as Variation) : DEFAULT_VARIATION
   if (!stops.every((s: { v: unknown; a: unknown }) => isNum(s.v) && isNum(s.a) && s.v >= 0 && s.v <= 1 && s.a >= 0 && s.a <= 1))
     return { ok: false, reason: 'That project has a stop that is not on the field.' }
   const named = (n: unknown) => Math.max(NOTE_NAMES.indexOf(String(n)), SHARP_NAMES.indexOf(String(n)))
@@ -114,6 +122,6 @@ export function parseProject(
   const density = DENSITIES.includes(raw.density) ? (raw.density as Density) : bpm === null ? null : 'auto'
   return {
     ok: true,
-    project: { stops, minutes, root, voice: typeof raw.voice === 'string' ? raw.voice : '', bpm, grid, density, seed: Math.floor(raw.seed) },
+    project: { stops, variation, minutes, root, voice: typeof raw.voice === 'string' ? raw.voice : '', bpm, grid, density, seed: Math.floor(raw.seed) },
   }
 }

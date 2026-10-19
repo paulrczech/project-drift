@@ -7,6 +7,7 @@
 import { MOODS } from '../engine/moods'
 import { emotionPalettes } from '../data/EmotionGradient'
 import type { Density, Grid } from '../engine/pulse'
+import type { Variation } from '../engine/compose'
 
 export interface Point {
   v: number // valence 0..1
@@ -14,6 +15,7 @@ export interface Point {
   key?: number // the stop's key (pitch class); left out, it is the key of the stop before
   grid?: Grid // the pulse's steps per beat here; left out, the stop before's (the first stop's is the sound menu's)
   density?: Density // how many of the pulse's weak steps sound here; likewise
+  variation?: Variation // how much the music changes here, for every sound; likewise (the first stop's is the sound menu's)
 }
 
 export interface Emotion extends Point {

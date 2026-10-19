@@ -8,6 +8,7 @@
 //
 // The pad is the default; the sound selector (and `?voice=pad|choir|choir-mixed|orchestra|pulse`) picks another.
 
+import { DEFAULT_VARIATION, VARIATIONS, type Variation } from './compose'
 import { DEFAULT_DENSITY, DEFAULT_GRID, DENSITIES, GRIDS, type Density, type Grid } from './pulse'
 
 export interface Layer {
@@ -337,6 +338,27 @@ export function currentDensity(): Density {
 export function rememberDensity(density: Density) {
   try {
     window.localStorage.setItem(DENSITY_KEY, density)
+  } catch {
+    /* applies to this visit only */
+  }
+}
+
+// How much the music changes (every sound), remembered like the tempo.
+const VARIATION_KEY = 'drift.variation'
+
+export function currentVariation(): Variation {
+  try {
+    const v = window.localStorage.getItem(VARIATION_KEY)
+    if (VARIATIONS.includes(v as Variation)) return v as Variation
+  } catch {
+    /* default */
+  }
+  return DEFAULT_VARIATION
+}
+
+export function rememberVariation(variation: Variation) {
+  try {
+    window.localStorage.setItem(VARIATION_KEY, variation)
   } catch {
     /* applies to this visit only */
   }

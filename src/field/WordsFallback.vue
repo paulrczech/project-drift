@@ -3,6 +3,7 @@
   import { EMOTIONS, type Point } from './moodPlane'
   import KeyPicker from './KeyPicker.vue'
   import ChoicePicker from './ChoicePicker.vue'
+  import { VARIATIONS, type Variation } from '../engine/compose'
   import { DENSITIES, GRIDS, GRID_LABEL, type Density, type Grid } from '../engine/pulse'
 
   // The fallback: the 21 words as plain dropdowns, one per stop of the journey, plus one more
@@ -14,6 +15,7 @@
     keys: (number | null)[] // each stop's key (the first: auto; later: null = the same as before)
     grids: (Grid | null)[] // each stop's pulse grid (the first: the sound menu's; later: null = the same as before)
     densities: (Density | null)[]
+    variations: (Variation | null)[] // each stop's variation (the first: the sound menu's; later: null = the same as before)
     pulse: boolean // the sound is the pulse, so grid and density apply
     drifting: boolean
     max: number
@@ -24,6 +26,7 @@
     (e: 'key', index: number, key: number | null): void
     (e: 'grid', index: number, grid: Grid | null): void
     (e: 'density', index: number, density: Density | null): void
+    (e: 'variation', index: number, variation: Variation | null): void
   }>()
 
   const open = ref(false)
@@ -60,7 +63,7 @@
     </button>
 
     <div v-show="open" id="words-panel" class="panel">
-      <div v-for="i in slots()" :key="i" class="stop" :class="{ feel: pulse && points[i] }">
+      <div v-for="i in slots()" :key="i" class="stop" :class="{ feel: points[i] }">
         <label>
           <span>{{ caption(i) }}</span>
           <select
@@ -81,6 +84,15 @@
           :label="`Key for ${i === 0 ? 'where you are' : 'stop ' + (i + 1)}`"
           :disabled="drifting"
           @update:model-value="emit('key', i, $event)" />
+        <ChoicePicker
+          v-if="points[i]"
+          class="stop-key"
+          :model-value="variations[i] ?? null"
+          :options="VARIATIONS.map((x) => ({ value: x, label: x }))"
+          :neutral="i === 0 ? undefined : 'same'"
+          :label="`Variation for ${i === 0 ? 'where you are' : 'stop ' + (i + 1)}`"
+          :disabled="drifting"
+          @update:model-value="emit('variation', i, $event as Variation | null)" />
         <template v-if="pulse && points[i]">
           <ChoicePicker
             class="stop-key"
@@ -164,7 +176,7 @@
     flex: none;
     min-width: 84px;
   }
-  /* with the pulse's grid and density there are four controls: the word on its own row, the rest beneath */
+  /* with the variation (and the pulse's grid and density) there are several controls: the word on its own row, the rest beneath */
   .stop.feel label {
     flex-basis: 100%;
   }

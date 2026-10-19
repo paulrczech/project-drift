@@ -46,7 +46,19 @@ export interface Waypoint {
   // the pulse's feel at this stop; left out, the stop before's (the first: the plan's)
   grid?: Grid
   density?: Density
+  variation?: Variation // how much the music changes here; left out, the stop before's (the first: gentle)
 }
+
+// VARIATION: how much the music changes over time, for every voice. It sets the pace of the
+// harmony's moves (and, for the pulse, how fast its notes are substituted and how much its
+// phrases vary). 'gentle' is how Drift has always moved. A stop's variation eases into the next
+// along the walk between them, as a number: 0 still, 0.5 gentle, 1 flowing.
+export const VARIATIONS = ['still', 'gentle', 'flowing'] as const
+export type Variation = (typeof VARIATIONS)[number]
+export const DEFAULT_VARIATION: Variation = 'gentle'
+export const VARIATION_AMOUNT: Record<Variation, number> = { still: 0, gentle: 0.5, flowing: 1 }
+// the factor on the time between harmonic moves: still waits 1.6 times as long, flowing 0.6
+export const paceFor = (amount: number) => (amount <= 0.5 ? 1.6 - 1.2 * amount : 1.2 - 0.6 * amount)
 
 export interface TimelinePlan {
   waypoints: Waypoint[]
@@ -117,6 +129,7 @@ export interface Layout {
   tonic0: number
   tonics: number[] // per waypoint
   arousals: number[] // per waypoint
+  variations: number[] // per waypoint: VARIATION_AMOUNT
   duration: number // Infinity if the last hold is Infinity
 }
 
@@ -139,6 +152,10 @@ export function layoutTimeline(waypoints: Waypoint[], walk: number | number[], s
   const raw: Flip[] = []
   const tonics: number[] = []
   waypoints.forEach((w, i) => tonics.push(w.tonic ?? (i === 0 ? startTonic : tonics[i - 1])))
+  const variations: number[] = []
+  waypoints.forEach((w, i) =>
+    variations.push(w.variation && w.variation in VARIATION_AMOUNT ? VARIATION_AMOUNT[w.variation] : i ? variations[i - 1] : VARIATION_AMOUNT[DEFAULT_VARIATION])
+  )
   let at = 0
   waypoints.forEach((w, i) => {
     at += w.hold
@@ -185,6 +202,7 @@ export function layoutTimeline(waypoints: Waypoint[], walk: number | number[], s
     tonic0: tonics[0],
     tonics,
     arousals: waypoints.map((w) => w.arousal ?? DEFAULT_AROUSAL),
+    variations,
     duration: at,
   }
 }
@@ -212,6 +230,17 @@ export function arousalAt(layout: Layout, t: number): number {
     }
   }
   return layout.arousals[layout.arousals.length - 1]
+}
+
+// The variation at time t (0 still … 1 flowing): a stop's own, easing along each walk to the next.
+export function variationAt(layout: Layout, t: number): number {
+  const v = layout.variations
+  for (let i = 0; i < layout.walks.length; i++) {
+    const w = layout.walks[i]
+    if (t < w.start) return v[i]
+    if (t < w.end) return v[i] + (v[i + 1] - v[i]) * ((t - w.start) / (w.end - w.start))
+  }
+  return v[v.length - 1]
 }
 
 // Where we are along the waypoints at time t, as a fractional index: 0 = at the first,
@@ -353,7 +382,8 @@ export class Composer {
 
   // Seconds between harmonic moves at time t, before any walk speed-up.
   private beatBase(t: number): number {
-    return this.beat ?? beatFor(arousalAt(this.layout, t))
+    const raw = this.beat ?? beatFor(arousalAt(this.layout, t))
+    return Math.max(raw * paceFor(variationAt(this.layout, t)), Math.min(raw, MIN_BEAT)) // flowing never outruns the pad's fade-in
   }
 
   // While walking, harmonic moves speed up so each flip can be followed by a voice

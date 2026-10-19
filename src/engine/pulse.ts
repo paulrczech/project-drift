@@ -20,6 +20,12 @@
 // the pattern keeps its identity while the notes that do not work are removed and ones that do
 // are added, never a jolt.
 //
+// VARIATION (per stop; still / gentle / flowing) sets how much of this happens: how long the
+// harmony waits between moves, how many differing notes are substituted at once (still: only on
+// phrase lines), and how much a phrase varies (still: a breath in every other phrase; gentle: a
+// change in the fourth cycle; flowing: also in the second, and the arpeggio's shape can change
+// on a phrase line). Gentle is the original behaviour.
+//
 // THE SHAPE. Phrases of four cycles with a small variation in the fourth; a dynamic arc that
 // rises and falls over a finite journey; and, near the end, the cell thins (passing notes, then
 // the upper chord tones) until the tonic is left alone.
@@ -31,6 +37,8 @@ import { getScaleNotes } from './eddy/scales'
 import {
   arousalAt,
   layoutTimeline,
+  paceFor,
+  variationAt,
   type Flip,
   type Layout,
   type NoteEvent,
@@ -149,7 +157,7 @@ export class PulseComposer {
   private nextFlip = 0
   private moveAt: number // when the next harmonic move happens
   private t = START // the next step
-  private template: number[]
+  private templateIdx: number
   private seed: number
 
   // the cell as it is being played, and how its notes are changing
@@ -195,7 +203,7 @@ export class PulseComposer {
       arousal: this.layout.arousals[0],
       rng: this.rng,
     })
-    this.template = TEMPLATES[Math.floor(this.rng() * TEMPLATES.length)]
+    this.templateIdx = Math.floor(this.rng() * TEMPLATES.length)
     this.seed = Math.floor(this.rng() * 2 ** 31)
     this.moveAt = this.baseBeat(0) * (0.6 + 0.4 * this.rng())
   }
@@ -205,7 +213,14 @@ export class PulseComposer {
   }
 
   private baseBeat(t: number): number {
-    return this.beat ?? beatFor(arousalAt(this.layout, t)) * HARMONY_SLOWER
+    return (this.beat ?? beatFor(arousalAt(this.layout, t)) * HARMONY_SLOWER) * paceFor(variationAt(this.layout, t))
+  }
+
+  // How much the music changes at time t, as one of three levels (the in-between of an easing
+  // walk takes the nearest).
+  private levelAt(t: number): 'still' | 'gentle' | 'flowing' {
+    const a = variationAt(this.layout, t)
+    return a < 0.25 ? 'still' : a > 0.75 ? 'flowing' : 'gentle'
   }
 
   // Make the engine's chord the chord at time t: every step and mode change up to t, in order.
@@ -317,7 +332,7 @@ export class PulseComposer {
     const scale = getScaleNotes(this.engine.tonic, LADDER[this.engine.rung], 36, 90)
     const g = this.grid
     const cell: Cell = Array(this.cellSteps).fill(null)
-    const strong = this.template.map((idx) => tones[idx % tones.length])
+    const strong = TEMPLATES[this.templateIdx].map((idx) => tones[idx % tones.length])
     strong.forEach((note, beat) => (cell[beat * g] = note))
     const n = this.weakCount()
     const fill = n === this.cellSteps - BEATS && n > 0 // every step sounds: none is left silent
@@ -338,6 +353,12 @@ export class PulseComposer {
   // ── a new cycle: change the cell by one substitution at a time ──────────────────────
   private startCycle() {
     this.cycle++
+    const level = this.levelAt(this.barAt)
+    const phrase = Math.floor(this.cycle / PHRASE)
+    const inPhrase = this.cycle % PHRASE
+    // flowing: on a phrase line the arpeggio may take another shape (its notes follow one by one)
+    if (level === 'flowing' && this.cycle > 0 && inPhrase === 0 && unit(this.seed, phrase + 104729) < 0.5)
+      this.templateIdx = (this.templateIdx + 1 + Math.floor(unit(this.seed, phrase + 1299709) * (TEMPLATES.length - 1))) % TEMPLATES.length
     const target = this.targetCell()
 
     if (this.cycle === 0) {
@@ -357,17 +378,23 @@ export class PulseComposer {
       for (let j = 0; j < this.cellSteps; j++) if (this.shown[j] !== target[j]) diffs.push(j)
       const bad = (j: number) => (this.shown[j] !== null && !this.inMode(this.shown[j] as number) ? 0 : 1)
       diffs.sort((a, b) => bad(a) - bad(b) || a - b)
-      const take = Math.max(1, Math.ceil(diffs.length / 3))
+      // how many change at once: still waits for a phrase line (the ones outside the mode go first)
+      const phraseLine = inPhrase === PHRASE - 1
+      const take =
+        level === 'still' ? (phraseLine ? Math.ceil(diffs.length / 2) : 0) : Math.max(1, Math.ceil(diffs.length / (level === 'flowing' ? 2 : 3)))
       this.planned = diffs.slice(0, take)
       this.leaving = Array(this.cellSteps).fill(false)
       for (const j of this.planned) this.leaving[j] = true
     }
 
-    // the phrase's variation, in its last cycle only
+    // the phrase's variation: gentle, in its last cycle; still, only a breath in every other phrase;
+    // flowing, in its second cycle too
     this.playing = [...this.shown]
-    const phrase = Math.floor(this.cycle / PHRASE)
-    if (this.cycle % PHRASE === PHRASE - 1) {
-      const v = Math.floor(unit(this.seed, phrase) * 4)
+    let v = 0
+    if (level === 'still') v = inPhrase === PHRASE - 1 && phrase % 2 === 1 ? 2 : 0
+    else if (inPhrase === PHRASE - 1) v = Math.floor(unit(this.seed, phrase) * 4)
+    else if (level === 'flowing' && inPhrase === 1) v = Math.floor(unit(this.seed, phrase + 7919) * 4)
+    if (v > 0) {
       const g = this.grid
       const lift = 3 * g // the last beat
       if (v === 1 && this.playing[lift] !== null && (this.playing[lift] as number) + 12 <= 76) this.playing[lift] = (this.playing[lift] as number) + 12 // lift

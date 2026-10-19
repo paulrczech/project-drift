@@ -2,6 +2,7 @@
   import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
   import KeyPicker from './KeyPicker.vue'
   import ChoicePicker from './ChoicePicker.vue'
+  import { VARIATIONS, type Variation } from '../engine/compose'
   import { NOTE_NAMES } from '../engine/score'
   import { DENSITIES, GRIDS, GRID_LABEL, type Density, type Grid } from '../engine/pulse'
   import {
@@ -26,6 +27,7 @@
     keys: (number | null)[] // per stop: its key, or null (the first: auto; later: the same as before)
     grids: (Grid | null)[] // per stop: the pulse's grid, or null (later stops: the same as before)
     densities: (Density | null)[]
+    variations: (Variation | null)[] // per stop: how much the music changes, or null (later stops: the same as before)
     pulse: boolean // the sound is the pulse, so a stop can set its grid and density
   }>()
 
@@ -35,6 +37,7 @@
     (e: 'key', index: number, key: number | null): void
     (e: 'grid', index: number, grid: Grid | null): void
     (e: 'density', index: number, density: Density | null): void
+    (e: 'variation', index: number, variation: Variation | null): void
     (e: 'clear'): void
     (e: 'preview', point: Point | null): void
   }>()
@@ -194,7 +197,7 @@
     const y = (1 - p.a) * r.height
     // beside the marker, kept on screen; above it when it sits low, so the ring stays clear
     const left = Math.min(Math.max(x - BUBBLE_W / 2, 8 - r.left), window.innerWidth - r.left - BUBBLE_W - 8)
-    bubbleAt.value = { left, top: p.a < 0.4 ? y - 34 - (props.pulse ? 132 + 2 * ROW : 132) : y + 34 }
+    bubbleAt.value = { left, top: p.a < 0.4 ? y - 34 - (132 + ROW + (props.pulse ? 2 * ROW : 0)) : y + 34 }
     await nextTick()
     bubble.value?.querySelector<HTMLElement>('select')?.focus()
   }
@@ -326,6 +329,15 @@
             :neutral="editing === 0 ? 'auto' : 'same'"
             :label="`Key for stop ${editing + 1}`"
             @update:model-value="emit('key', editing, $event)" />
+        </label>
+        <label class="bubble-row">
+          <span>change</span>
+          <ChoicePicker
+            :model-value="variations[editing] ?? null"
+            :options="VARIATIONS.map((x) => ({ value: x, label: x }))"
+            :neutral="editing === 0 ? undefined : 'same'"
+            :label="`Variation for stop ${editing + 1}`"
+            @update:model-value="emit('variation', editing, $event as Variation | null)" />
         </label>
         <template v-if="pulse">
           <label class="bubble-row">
