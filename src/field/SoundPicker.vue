@@ -158,7 +158,7 @@
         <span v-if="size(v.megabytes)" class="mb">{{ size(v.megabytes) }}</span>
       </button>
       </div>
-      <div v-if="isPulse()" class="tempo" role="radiogroup" aria-label="Tempo">
+      <div class="tempo" role="radiogroup" :aria-label="isPulse() ? 'Tempo' : 'Tempo of exported files'">
         <span class="tempo-label" aria-hidden="true">tempo</span>
         <button
           v-for="(f, i) in FEELS"
@@ -182,7 +182,7 @@
             :max="BPM_MAX"
             step="1"
             :value="bpm"
-            aria-label="Beats per minute"
+            :aria-label="isPulse() ? 'Beats per minute' : 'Beats per minute of exported files'"
             @change="typedBpm"
             @keydown="bpmKey" />
           <span aria-hidden="true">BPM</span>
@@ -224,7 +224,7 @@
           {{ d }}
         </button>
       </div>
-      <div class="tempo" :class="{ row: isPulse() }" role="radiogroup" aria-label="Variation: how much the music changes">
+      <div class="tempo row" role="radiogroup" aria-label="Variation: how much the music changes">
         <span class="tempo-label" aria-hidden="true">change</span>
         <button
           v-for="(x, i) in VARIATIONS"

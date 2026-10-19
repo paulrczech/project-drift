@@ -18,7 +18,7 @@ export interface Project {
   key: string // e.g. "F#" (informational; `root` is what is read)
   root: number // 0 = C … 11 = B
   voice: string // a voice id: pad, voices, orchestra, pulse…
-  bpm: number | null // the pulse's tempo; null for sounds without a beat
+  bpm: number | null // the tempo (the pulse plays to it; other sounds' files are written at it); null in files from before
   grid: Grid | null // the pulse's steps per beat (1–4); null for sounds without a beat
   density: Density | null // how many of the pulse's weak steps sound; null for sounds without a beat
   seed: number

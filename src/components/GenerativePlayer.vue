@@ -15,7 +15,7 @@
   interface Props {
     plan: Omit<TimelinePlan, 'rng'>
     seed: number
-    bpm?: number // the pulse's fixed tempo (other voices play in free time)
+    bpm?: number // the journey's tempo (only the pulse plays to it; other voices play in free time)
     grid?: Grid // the pulse's steps per beat
     density?: Density // how many of the pulse's weak steps sound
   }

@@ -4,7 +4,7 @@
 
 import { LADDER } from './drift'
 import { Composer, arousalAt, stateAt, type TimelinePlan } from './compose'
-import { GRID_LABEL, PulseComposer, START } from './pulse'
+import { GRID_LABEL, PulseComposer, START, clampBpm } from './pulse'
 import { mulberry } from './rng'
 import { performerFor, type Tempo } from './performer'
 import { routeNote, type Voice } from './voices'
@@ -37,8 +37,9 @@ export const NOTE_NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A',
 // the sharp spellings, accepted when reading files and text
 export const SHARP_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 
-// Sounds with no beat (the pad, the sections) are written at 60 BPM, so a beat is a second and
-// the notes sit where they sounded.
+// Sounds with no beat (the pad, the sections) are written at the journey's tempo when there is
+// one (so files of every sound line up in a DAW: a mode change falls on the same bar and beat in
+// each), else at 60 BPM, where a beat is a second. Their notes sit where they sounded either way.
 const FREE_BPM = 60
 // An endless journey has no end to export: its walk, then this much of the final mode.
 export const ENDLESS_TAIL = 60
@@ -71,7 +72,9 @@ export function scoreFor(
   const layout = performer.layout
   const events = performer.pull(Infinity)
   const tracks: ScoreTrack[] = []
-  let bpm = FREE_BPM
+  let bpm = tempo.bpm ? clampBpm(tempo.bpm) : FREE_BPM
+  // The pulse's first pulse sits at 0 (it sounds START seconds into the drift), so every file is shifted
+  // by START: a mode change then falls at the same time in the pulse's file as in the pad's.
 
   if (performer instanceof PulseComposer) {
     bpm = performer.bpm
@@ -108,9 +111,9 @@ export function scoreFor(
       for (const r of routeNote(voice, h.note, arousalAt(layout, h.start))) {
         byLayer.get(r.layer.id)!.notes.push({
           midi: r.note,
-          time: h.start,
+          time: Math.max(0, h.start - START),
           // a hair short, so a voice that hands a pitch on does not make the same note overlap itself
-          duration: Math.max(0.1, h.end - h.start - 0.01),
+          duration: Math.max(0.1, h.end - Math.max(START, h.start) - 0.01),
           velocity: voice.layers.length > 1 ? Math.min(1, Math.max(0.2, (r.velocity / loudest) * 0.85)) : 0.7,
         })
       }
@@ -126,8 +129,9 @@ export function scoreFor(
     const now = stateAt(layout, f.time) // every step at this instant included
     const last = markers[markers.length - 1]
     const text = name(now.rung, now.tonic)
-    if (f.time - last.time < 1e-6) last.text = text
-    else markers.push({ time: f.time, text })
+    const time = Math.max(0, f.time - START)
+    if (time - last.time < 1e-6) last.text = text
+    else markers.push({ time, text })
   }
   // where a pulse changes its grid
   if (performer instanceof PulseComposer)

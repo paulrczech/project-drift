@@ -62,8 +62,10 @@
     say(`Sound: ${VOICES[id].label}.`)
   }
 
-  // The pulse's tempo is fixed for the whole journey. By default it comes from the stops' mean
-  // arousal, scaled by slow / medium / fast; or the listener types an exact BPM.
+  // The tempo is fixed for the whole journey. By default it comes from the stops' mean arousal,
+  // scaled by slow / medium / fast; or the listener types an exact BPM. The pulse plays to it; the
+  // other sounds have no beat, but their exported files are written at it, so files of every sound
+  // line up in a DAW.
   const tempoFeel = ref<TempoFeelName>(currentTempoFeel())
   const customBpm = ref<number | null>(currentCustomBpm())
   const effectiveBpm = computed(
@@ -87,7 +89,7 @@
     rememberCustomBpm(customBpm.value)
     say(`Tempo: ${customBpm.value} BPM.`)
   }
-  const driftBpm = ref<number | undefined>(undefined) // the tempo this drift was started with
+  const driftBpm = ref<number | undefined>(undefined) // the tempo this drift was started with (all sounds)
 
   // The pulse's grid (steps per beat) and density (how many of the weak steps sound), fixed for the journey.
   const gridChoice = ref<Grid>(currentGrid())
@@ -298,7 +300,7 @@
     totalSeconds.value = layoutTimeline(plan.value.waypoints, plan.value.walk, plan.value.tonic).duration
     seed.value = forcedSeed ?? Math.floor(Math.random() * 2 ** 31)
     const pulse = VOICES[voiceId.value]?.style === 'pulse'
-    driftBpm.value = pulse ? effectiveBpm.value : undefined
+    driftBpm.value = effectiveBpm.value
     driftGrid.value = pulse ? gridChoice.value : undefined
     driftDensity.value = pulse ? densityChoice.value : undefined
     const uniform = tonics.every((t) => t === tonics[0])
@@ -312,7 +314,7 @@
       }
     })
     layout.value = layoutTimeline(plan.value.waypoints, plan.value.walk, plan.value.tonic)
-    info.value = { key: NOTE_NAMES[tonics[0]], uniform, stages, bpm: driftBpm.value, seed: `seed ${seed.value}` }
+    info.value = { key: NOTE_NAMES[tonics[0]], uniform, stages, bpm: pulse ? driftBpm.value : undefined, seed: `seed ${seed.value}` }
     lastDrift = {
       voiceId: voiceId.value,
       plan: plan.value,
@@ -338,7 +340,7 @@
         ? `in ${words[0]}`
         : `from ${words[0]}${words.length > 2 ? ` through ${words.slice(1, -1).join(', ')}` : ''} to ${words[words.length - 1]}`
     say(
-      `Drifting ${route} ${lengthName(minutes.value)}, ${uniform ? `in ${NOTE_NAMES[tonics[0]]}` : `from ${NOTE_NAMES[tonics[0]]} to ${NOTE_NAMES[tonics[tonics.length - 1]]}`}${driftBpm.value ? `, ${driftBpm.value} beats per minute` : ''}.`
+      `Drifting ${route} ${lengthName(minutes.value)}, ${uniform ? `in ${NOTE_NAMES[tonics[0]]}` : `from ${NOTE_NAMES[tonics[0]]} to ${NOTE_NAMES[tonics[tonics.length - 1]]}`}${pulse ? `, ${driftBpm.value} beats per minute` : ''}.`
     )
   }
 
