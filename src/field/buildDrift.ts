@@ -1,13 +1,13 @@
-// What a Begin works out, with no Vue in it: the stops and the sound menu's settings in, the plan, its
+// What a Begin works out, with no Vue in it: the stops and the sound menu's settings in, the timeline, the plan, its
 // layout in time, the stages shown in the readout and the record an export is made from out. The only
 // chance in it is `random`, drawn in a fixed order (the key, then the seed), so a test can give it
 // fixed numbers.
 
 import { NOTE_NAMES } from '../engine/score'
-import { rungFor } from '../engine/moods'
 import { BARS_NAME, layoutTimeline, type Bars, type Layout, type TimelinePlan, type Variation } from '../engine/compose'
 import type { Density, Grid } from '../engine/pulse'
 import { LADDER } from '../engine/drift'
+import { timelineFromStops, toPlan, type Timeline } from '../engine/timeline'
 import { describe, type Point } from './moodPlane'
 
 export type Plan = Omit<TimelinePlan, 'rng'>
@@ -53,39 +53,6 @@ export interface DriftRecord {
 export const ordinal = (n: number) => `stop ${n}`
 export const lengthName = (m: number) => (m === Infinity ? 'with no end' : m === 1 ? 'for 1 minute' : `for ${m} minutes`)
 
-// Length is for the whole drift: 15% settled where you are, 30% arriving where you are going
-// (ending in the fade), and the middle 55% travelling — split between the legs, with a brief
-// settle (a third of a leg) at each stop in between so every mood is heard. ∞ travels over
-// ten minutes, then stays.
-export function planFor(
-  pts: Point[],
-  m: number,
-  tonics: number[],
-  first: { variation: Variation; bars: Bars } // the first stop's variation and bars are the sound menu's
-): Plan {
-  const endless = m === Infinity
-  const total = (endless ? 10 : m) * 60
-  // a later stop may set the pulse's grid and density, and every sound's variation; the first stop's are the sound menu's
-  const moods = pts.map((p, i) => ({
-    rung: rungFor(p.v),
-    arousal: p.a,
-    tonic: tonics[i],
-    variation: i > 0 ? p.variation : first.variation,
-    ...(i > 0 ? { grid: p.grid, density: p.density } : {}),
-    bars: i > 0 ? p.bars : first.bars, // clusters (the pulse: patterns) change every n bars, or 0 for free time
-  }))
-  const n = moods.length
-  if (n === 1) return { waypoints: [{ ...moods[0], hold: endless ? Infinity : total }], walk: 0 }
-  const leg = (total * 0.55) / (n - 1 + 0.3 * (n - 2))
-  return {
-    waypoints: moods.map((mood, i) => ({
-      ...mood,
-      hold: i === 0 ? total * 0.15 : i === n - 1 ? (endless ? Infinity : total * 0.3) : leg * 0.3,
-    })),
-    walk: leg,
-  }
-}
-
 export interface DriftInput {
   points: Point[]
   minutes: number
@@ -103,6 +70,7 @@ export interface DriftInput {
 }
 
 export interface Drift {
+  timeline: Timeline // the journey counted in bars (Journeyer's is one section)
   plan: Plan
   seed: number
   bpm: number
@@ -125,7 +93,11 @@ export function buildDrift(input: DriftInput): Drift {
   points.forEach((p, i) =>
     tonics.push(i === 0 ? input.rootChoice ?? input.kept?.key ?? Math.floor(input.random() * 12) : p.key ?? tonics[i - 1])
   )
-  const plan: Plan = { ...planFor(points, minutes, tonics, { variation: input.variation, bars: input.bars }), tonic: tonics[0] }
+  // Length is for the whole drift: 15% settled where you are, 30% arriving where you are going (ending in
+  // the fade), the middle 55% travelling (see timelineFromStops)
+  const timeline = timelineFromStops(points, minutes, bpm, { variation: input.variation, bars: input.bars })
+  const { waypoints, walk } = toPlan(timeline, tonics)
+  const plan: Plan = { waypoints, walk, tonic: tonics[0] }
   const seed = input.seedOverride ?? input.kept?.seed ?? Math.floor(input.random() * 2 ** 31)
   const grid = pulse ? input.grid : undefined
   const density = pulse ? input.density : undefined
@@ -176,5 +148,5 @@ export function buildDrift(input: DriftInput): Drift {
   const announcement =
     `Drifting ${route} ${lengthName(minutes)}, ${uniform ? `in ${NOTE_NAMES[tonics[0]]}` : `from ${NOTE_NAMES[tonics[0]]} to ${NOTE_NAMES[tonics[tonics.length - 1]]}`}${pulse || onBars ? `, ${bpm} beats per minute` : ''}${onBars && input.bars ? `, a new ${pulse ? 'pattern' : 'cluster'} ${BARS_NAME[input.bars]}` : ''}.` +
     eased.map((e) => ` ${pulse ? 'Pattern' : 'Chords'} at ${ordinal(e.stop + 1)} eased from ${BARS_NAME[e.asked]} to ${BARS_NAME[e.got]}, to fit.`).join('')
-  return { plan, seed, bpm, grid, density, voiceId, layout, readout, record, announcement, eased }
+  return { timeline, plan, seed, bpm, grid, density, voiceId, layout, readout, record, announcement, eased }
 }
