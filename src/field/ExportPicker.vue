@@ -12,12 +12,14 @@
     playing: boolean // sound is playing (or still fading out)
     busy: string // '' when idle, else what is being made ("rendering 30%")
     canClips: boolean // there are bar lines to cut on (chords on bars, or the pulse)
+    keeping: boolean // the seed (and key) of the last drift is kept for every Begin
   }>()
   const emit = defineEmits<{
     (e: 'midi'): void
     (e: 'wav'): void
     (e: 'save'): void
     (e: 'clips'): void
+    (e: 'keep'): void
     (e: 'variations', count: number, format: 'mid' | 'wav'): void
     (e: 'open', text: string): void
   }>()
@@ -163,8 +165,18 @@
           <span class="note">{{ format === 'wav' && playing ? 'when stopped' : '' }}</span>
         </button>
       </div>
+      <button
+        :ref="(el) => el && (items[6] = el as HTMLButtonElement)"
+        class="option"
+        type="button"
+        :aria-pressed="keeping"
+        :disabled="!hasJourney && !keeping"
+        @click="emit('keep'), hide()">
+        <span class="name">keep seed</span>
+        <span class="note">{{ keeping ? 'on' : 'for the next begin' }}</span>
+      </button>
       <hr />
-      <button :ref="(el) => el && (items[6] = el as HTMLButtonElement)" class="option" type="button" :disabled="!canOpen" @click="chooseFile">
+      <button :ref="(el) => el && (items[7] = el as HTMLButtonElement)" class="option" type="button" :disabled="!canOpen" @click="chooseFile">
         <span class="name">open project</span>
         <span class="note">{{ playing ? 'when stopped' : '' }}</span>
       </button>

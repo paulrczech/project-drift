@@ -196,6 +196,19 @@
   // ── choosing ────────────────────────────────────────────────────────────────────────
   // a seed from an opened project, used by the next Begin only (any edit to the journey drops it)
   let seedOverride: number | null = null
+  // "keep seed" (file menu): the last drift's seed and key are used by every Begin, so the same journey
+  // can be heard (and exported) on another sound or tempo, with the same chords on bars. For this visit
+  // only; an opened project brings its own seed and clears it.
+  const kept = ref<{ seed: number; key: number } | null>(null)
+  function keepSeed() {
+    if (kept.value) {
+      kept.value = null
+      say('Seed released: each Begin draws a new one.')
+    } else if (lastDrift) {
+      kept.value = { seed: lastDrift.seed, key: lastDrift.plan.tonic ?? 0 }
+      say(`Seed ${lastDrift.seed} kept, in ${NOTE_NAMES[kept.value.key]}. Begin again, on any sound, to hear it again.`)
+    }
+  }
   function reset() {
     seedOverride = null
     position.value = 0
@@ -307,10 +320,10 @@
     // with none chosen keeps the key of the stop before it
     const tonics: number[] = []
     points.value.forEach((p, i) =>
-      tonics.push(i === 0 ? rootChoice.value ?? Math.floor(Math.random() * 12) : p.key ?? tonics[i - 1])
+      tonics.push(i === 0 ? rootChoice.value ?? kept.value?.key ?? Math.floor(Math.random() * 12) : p.key ?? tonics[i - 1])
     )
     plan.value = { ...planFor(points.value, minutes.value, tonics), tonic: tonics[0] }
-    seed.value = forcedSeed ?? Math.floor(Math.random() * 2 ** 31)
+    seed.value = forcedSeed ?? kept.value?.seed ?? Math.floor(Math.random() * 2 ** 31)
     const pulse = VOICES[voiceId.value]?.style === 'pulse'
     driftBpm.value = effectiveBpm.value
     totalSeconds.value = layoutTimeline(plan.value.waypoints, plan.value.walk, plan.value.tonic, driftBpm.value).duration
@@ -424,6 +437,7 @@
     barsChoice.value = p.bars
     warmUp()
     seedOverride = p.seed
+    kept.value = null
     say(`Project opened: ${p.stops.length === 1 ? '1 stop' : `${p.stops.length} stops`}, ${NOTE_NAMES[p.root]}. Press begin.`)
   }
 
@@ -730,7 +744,7 @@
         <template v-if="info.bars"> · {{ info.bars }} bars</template>
         <template v-if="info.bpm"> · {{ info.bpm }} BPM</template>
         <template v-if="info.eased"> · {{ isPulse ? 'pattern' : 'chords' }} eased to fit</template>
-        <span class="seed">{{ info.seed }}</span>
+        <span class="seed">{{ info.seed }}{{ kept ? ' · kept' : '' }}</span>
         <span class="seed passing">{{ passing }}</span>
       </template>
     </p>
@@ -776,6 +790,8 @@
         :playing="audioActive"
         :busy="exporting"
         :can-clips="canClips"
+        :keeping="!!kept"
+        @keep="keepSeed"
         @midi="exportMidi"
         @wav="exportWav"
         @save="saveProject"
