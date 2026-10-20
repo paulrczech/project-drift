@@ -145,7 +145,7 @@
     from: number
     to: number
   }
-  const info = ref<{ key: string; uniform: boolean; stages: Stage[]; bpm?: number; seed: string } | null>(null)
+  const info = ref<{ key: string; uniform: boolean; stages: Stage[]; bpm?: number; bars?: number; eased?: boolean; seed: string } | null>(null)
   const layout = shallowRef<Layout | null>(null) // reactive, so what is sounding follows it
   // what was begun, so it can be taken away exactly as it sounded (same plan, seed, voice, tempo)
   let lastDrift: {
@@ -330,7 +330,18 @@
     layout.value = layoutTimeline(plan.value.waypoints, plan.value.walk, plan.value.tonic, driftBpm.value)
     // the tempo is shown where it matters: the pulse plays to it, and bars are counted in it
     const onBars = plan.value.waypoints.some((w) => w.bars)
-    info.value = { key: NOTE_NAMES[tonics[0]], uniform, stages, bpm: pulse || onBars ? driftBpm.value : undefined, seed: `seed ${seed.value}` }
+    // a stop's chord setting that does not fit its stretch of the journey is eased to the longest that does
+    const L = layout.value
+    const eased = L.bars.flatMap((b, i) => (b !== L.barsAsked[i] ? [{ stop: i, asked: L.barsAsked[i] as Bars, got: b as Bars }] : []))
+    info.value = {
+      key: NOTE_NAMES[tonics[0]],
+      uniform,
+      stages,
+      bpm: pulse || onBars ? driftBpm.value : undefined,
+      bars: L.barSeconds && Number.isFinite(L.duration) ? Math.round(L.duration / L.barSeconds) : undefined,
+      eased: eased.length > 0,
+      seed: `seed ${seed.value}`,
+    }
     lastDrift = {
       voiceId: voiceId.value,
       plan: plan.value,
@@ -356,7 +367,8 @@
         ? `in ${words[0]}`
         : `from ${words[0]}${words.length > 2 ? ` through ${words.slice(1, -1).join(', ')}` : ''} to ${words[words.length - 1]}`
     say(
-      `Drifting ${route} ${lengthName(minutes.value)}, ${uniform ? `in ${NOTE_NAMES[tonics[0]]}` : `from ${NOTE_NAMES[tonics[0]]} to ${NOTE_NAMES[tonics[tonics.length - 1]]}`}${pulse || onBars ? `, ${driftBpm.value} beats per minute` : ''}${onBars && barsChoice.value ? `, a new cluster ${BARS_NAME[barsChoice.value]}` : ''}.`
+      `Drifting ${route} ${lengthName(minutes.value)}, ${uniform ? `in ${NOTE_NAMES[tonics[0]]}` : `from ${NOTE_NAMES[tonics[0]]} to ${NOTE_NAMES[tonics[tonics.length - 1]]}`}${pulse || onBars ? `, ${driftBpm.value} beats per minute` : ''}${onBars && barsChoice.value ? `, a new cluster ${BARS_NAME[barsChoice.value]}` : ''}.` +
+        eased.map((e) => ` Chords at ${ordinal(e.stop + 1)} eased from ${BARS_NAME[e.asked]} to ${BARS_NAME[e.got]}, to fit.`).join('')
     )
   }
 
@@ -685,7 +697,9 @@
           <span class="mode" :class="{ on: i === activeStage }">{{ st.label }}</span>
           <template v-if="i < info.stages.length - 1"> → </template>
         </template>
+        <template v-if="info.bars"> · {{ info.bars }} bars</template>
         <template v-if="info.bpm"> · {{ info.bpm }} BPM</template>
+        <template v-if="info.eased"> · chords eased to fit</template>
         <span class="seed">{{ info.seed }}</span>
         <span class="seed passing">{{ passing }}</span>
       </template>

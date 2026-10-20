@@ -147,7 +147,8 @@ export interface Layout {
   tonics: number[] // per waypoint
   arousals: number[] // per waypoint
   variations: number[] // per waypoint: VARIATION_AMOUNT
-  bars: number[] // per waypoint: clusters on bars (0: free)
+  bars: number[] // per waypoint: clusters on bars (0: free), as far as the stop's stretch allows
+  barsAsked: number[] // per waypoint: what was asked for (differs from `bars` where it did not fit)
   barSeconds: number // one bar, in seconds, when any stop is on bars (else 0)
   duration: number // Infinity if the last hold is Infinity
 }
@@ -175,7 +176,7 @@ export function layoutTimeline(waypoints: Waypoint[], walk: number | number[], s
   waypoints.forEach((w, i) =>
     variations.push(w.variation && w.variation in VARIATION_AMOUNT ? VARIATION_AMOUNT[w.variation] : i ? variations[i - 1] : VARIATION_AMOUNT[DEFAULT_VARIATION])
   )
-  const bars: number[] = []
+  const bars: Bars[] = []
   waypoints.forEach((w, i) => bars.push(BARS.includes(w.bars as Bars) ? (w.bars as Bars) : i ? bars[i - 1] : DEFAULT_BARS))
   let at = 0
   waypoints.forEach((w, i) => {
@@ -212,21 +213,62 @@ export function layoutTimeline(waypoints: Waypoint[], walk: number | number[], s
       for (let k = 0; k < Math.abs(net[kind]); k++) flips.push({ time: raw[i].time, dir: net[kind] > 0 ? 1 : -1, kind })
     i = j
   }
-  // On bars, a step lands on the downbeat of the cluster grid nearest to it (never in the last
-  // seconds), several on one downbeat if they fall together; the order is kept.
+  // On bars (needs the tempo), a stop's setting is capped to the longest one that fits its stretch
+  // (from the middle of the walk to it to the middle of the walk away: an 8-bar change cannot
+  // happen in a stop that lasts 7 s), and the steps are then laid on downbeats.
   const barSeconds = bpm && bars.some((b) => b > 0) ? 240 / bpm : 0
+  const barsAsked = bars.slice()
   if (barSeconds) {
-    let last = 0
+    const mid = (i: number) => (walks[i].start + walks[i].end) / 2
+    bars.forEach((b, i) => {
+      const room = (i < walks.length ? mid(i) : at) - (i ? mid(i - 1) : 0)
+      while (b > 1 && b * barSeconds > room) b = BARS[BARS.indexOf(b) - 1]
+      bars[i] = b
+    })
+    // A step lands on a downbeat of its stop's grid, never in the last seconds, each on its own as
+    // far as the walk allows (the steps of one half-walk are spread over the downbeats there, in
+    // order); when there are more steps than downbeats, they share them as evenly as can be.
+    const groups = new Map<string, { f: Flip[]; wi: number; half: number }>()
     for (const f of flips) {
-      const n = bars[walks.filter((x) => (x.start + x.end) / 2 <= f.time).length]
+      const found = walks.findIndex((x) => f.time <= x.end)
+      const wi = found < 0 ? walks.length - 1 : found
+      const half = f.time >= mid(wi) ? 1 : 0
+      const key = `${wi}:${half}`
+      if (!groups.has(key)) groups.set(key, { f: [], wi, half })
+      groups.get(key)!.f.push(f)
+    }
+    let last = 0
+    for (const { f: group, wi, half } of groups.values()) {
+      const n = bars[wi + half]
       if (n) {
         const span = n * barSeconds
-        let time = START + Math.max(0, Math.round((f.time - START) / span)) * span
-        while (time > at - 6 && time - span >= START) time -= span
-        f.time = time
+        const nearest = (t: number) => Math.max(0, Math.round((t - START) / span))
+        // the half-walk, widened by half a span (as far as plain rounding would reach), and after the
+        // step before
+        const lo = Math.max(half ? mid(wi) - span / 2 : walks[wi].start, START)
+        const hi = Math.min(half ? walks[wi].end : mid(wi) + span / 2, walks[wi].end, at - 6)
+        const kmin = Math.max(Math.ceil((lo - START) / span - 1e-9), last > START ? Math.floor((last - START) / span + 1e-9) + 1 : 0)
+        const kmax = Math.floor((hi - START) / span + 1e-9)
+        const room = kmax - kmin + 1
+        let ks: number[]
+        if (room <= 0) {
+          // no downbeat in this half-walk: the nearest one, pulled back before the closing seconds
+          ks = group.map((f) => {
+            let k = nearest(f.time)
+            while (START + k * span > at - 6 && k > 0) k--
+            return k
+          })
+        } else if (room >= group.length) {
+          ks = group.map((f) => Math.min(kmax, Math.max(kmin, nearest(f.time))))
+          for (let j = 1; j < ks.length; j++) ks[j] = Math.max(ks[j], ks[j - 1] + 1)
+          for (let j = ks.length - 1; j >= 0; j--) ks[j] = Math.min(ks[j], j + 1 < ks.length ? ks[j + 1] - 1 : kmax)
+        } else ks = group.map((_, j) => kmin + Math.floor((j * room) / group.length))
+        group.forEach((f, j) => (f.time = START + ks[j] * span))
       }
-      f.time = Math.max(f.time, last)
-      last = f.time
+      for (const f of group) {
+        f.time = Math.max(f.time, last)
+        last = f.time
+      }
     }
   }
   for (const f of flips) {
@@ -242,6 +284,7 @@ export function layoutTimeline(waypoints: Waypoint[], walk: number | number[], s
     arousals: waypoints.map((w) => w.arousal ?? DEFAULT_AROUSAL),
     variations,
     bars,
+    barsAsked,
     barSeconds,
     duration: at,
   }
