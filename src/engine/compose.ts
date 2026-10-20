@@ -11,7 +11,7 @@
 // with `composeTimeline`.
 
 import type { Density, Grid } from './pulse'
-import { DEFAULT_TONIC, DriftEngine, beatFor, type Move, type Rung } from './drift'
+import { DEFAULT_TONIC, DriftEngine, beatFor, stepRung, stepsBetween, type Move, type Rung } from './drift'
 import { Progression, type Line } from './progression'
 
 export const START = 0.3 // seconds before the first pulse of the pulse, and the first bar line of a pad on bars
@@ -147,6 +147,8 @@ export interface Flip {
   time: number
   dir: 1 | -1
   kind: 'rung' | 'key'
+  to?: number // a mode step: the mode it arrives in (set by the layout; see stepRung)
+  ends?: number[] // while laying out: the modes at the ends of the walk(s) it belongs to
 }
 
 export interface Layout {
@@ -195,7 +197,7 @@ export function layoutTimeline(waypoints: Waypoint[], walk: number | number[], s
     const next = waypoints[i + 1]
     if (!next) return
     const seconds = Array.isArray(walk) ? walk[i] : walk
-    const n = Math.abs(next.rung - w.rung)
+    const n = stepsBetween(w.rung, next.rung)
     const dir = next.rung > w.rung ? 1 : -1
     const k = fifthsBetween(tonics[i], tonics[i + 1])
     const m = Math.abs(k)
@@ -207,7 +209,7 @@ export function layoutTimeline(waypoints: Waypoint[], walk: number | number[], s
       if (Math.round(((j + 1) * m) / total) > keys) {
         keys++
         raw.push({ time, dir: k > 0 ? 1 : -1, kind: 'key' })
-      } else raw.push({ time, dir, kind: 'rung' })
+      } else raw.push({ time, dir, kind: 'rung', ends: [w.rung, next.rung] })
     }
     walks.push({ start: at, end: at + seconds, flips: [] })
     at += seconds
@@ -219,9 +221,14 @@ export function layoutTimeline(waypoints: Waypoint[], walk: number | number[], s
   for (let i = 0; i < raw.length; ) {
     let j = i
     const net = { rung: 0, key: 0 }
-    while (j < raw.length && raw[j].time - raw[i].time < MIN_FLIP_GAP) net[raw[j].kind] += raw[j++].dir
+    const ends: number[] = []
+    while (j < raw.length && raw[j].time - raw[i].time < MIN_FLIP_GAP) {
+      if (raw[j].ends) ends.push(...raw[j].ends!)
+      net[raw[j].kind] += raw[j++].dir
+    }
     for (const kind of ['key', 'rung'] as const)
-      for (let k = 0; k < Math.abs(net[kind]); k++) flips.push({ time: raw[i].time, dir: net[kind] > 0 ? 1 : -1, kind })
+      for (let k = 0; k < Math.abs(net[kind]); k++)
+        flips.push({ time: raw[i].time, dir: net[kind] > 0 ? 1 : -1, kind, ...(kind === 'rung' ? { ends } : {}) })
     i = j
   }
   // On bars (needs the tempo), a stop's setting is capped to the longest one that fits its stretch
@@ -282,9 +289,15 @@ export function layoutTimeline(waypoints: Waypoint[], walk: number | number[], s
       }
     }
   }
+  // the mode each mode step arrives in (melodic minor is stepped onto only by a walk that has it as an end)
+  let rungNow = waypoints[0].rung
   for (const f of flips) {
     const w = walks.find((x) => f.time >= x.start && f.time <= x.end)
     if (w) w.flips.push(f.time)
+    if (f.kind === 'rung') {
+      f.to = rungNow = stepRung(rungNow, f.dir, f.ends ?? [])
+      delete f.ends
+    }
   }
   return {
     walks,
@@ -308,7 +321,7 @@ export function stateAt(layout: Layout, t: number): { rung: number; tonic: numbe
   let fifths = 0
   for (const f of layout.flips) {
     if (f.time > t) break
-    if (f.kind === 'rung') rung += f.dir
+    if (f.kind === 'rung') rung = f.to ?? rung + f.dir
     else fifths += f.dir
   }
   return { rung, tonic: (((layout.tonic0 + 7 * fifths) % 12) + 12) % 12 }
@@ -518,7 +531,7 @@ export class Composer {
   private flip(f: Flip) {
     // voices holding the changed degree follow it
     if (f.kind === 'key') this.engine.modulate(f.dir)
-    else this.engine.shift(f.dir)
+    else this.engine.shiftTo(f.to!)
     this.marks.push({ time: f.time, kind: 'shift', rung: this.engine.rung })
     // the shifted notes have to be reflected in what is sounding
     const cluster = this.engine.cluster
@@ -538,7 +551,7 @@ export class Composer {
     while (this.nextFlip < flips.length && flips[this.nextFlip].time <= t + 1e-6) {
       const f = flips[this.nextFlip++]
       if (f.kind === 'key') this.engine.modulate(f.dir)
-      else this.engine.shift(f.dir)
+      else this.engine.shiftTo(f.to!)
       this.marks.push({ time: f.time, kind: 'shift', rung: this.engine.rung })
     }
     this.engine.setArousal(arousalAt(layout, t))

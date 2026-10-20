@@ -6,7 +6,7 @@
 import { NOTE_NAMES } from '../engine/score'
 import { BARS_NAME, layoutTimeline, type Bars, type Layout, type TimelinePlan, type Variation } from '../engine/compose'
 import type { Density, Grid } from '../engine/pulse'
-import { LADDER } from '../engine/drift'
+import { modeName } from '../engine/drift'
 import { barSecondsAt, pointsOf, totalBars, timelineFromStops, toPlan, type Timeline } from '../engine/timeline'
 import { describe, type Point } from './moodPlane'
 
@@ -116,7 +116,7 @@ export function buildDrift(input: DriftInput): Drift {
     const last = stages[stages.length - 1]
     if (last && last.rung === w.rung && last.key === tonics[i]) last.to = i
     else {
-      const mode = LADDER[w.rung]
+      const mode = modeName(w.rung)
       stages.push({ mode, key: tonics[i], label: uniform ? mode : `${NOTE_NAMES[tonics[i]]} ${mode}`, rung: w.rung, from: i, to: i })
     }
   })

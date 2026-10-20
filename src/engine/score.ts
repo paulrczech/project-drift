@@ -2,7 +2,7 @@
 // seed, same tempo) is asked for its notes, but a pad's re-strikes are put back together into the
 // long notes the harmony really holds, split by section for the orchestra. Pure: no Tone.
 
-import { LADDER } from './drift'
+import { modeName } from './drift'
 import { Composer, arousalAt, downbeat, stateAt, textIndexAt, type TimelinePlan } from './compose'
 import { GRID_LABEL, PulseComposer, START, clampBpm } from './pulse'
 import { mulberry } from './rng'
@@ -135,7 +135,7 @@ export function scoreFor(
 
   // the mode (and key, if it changes), wherever either changes
   const uniformKey = layout.tonics.every((t) => t === layout.tonics[0])
-  const name = (rung: number, tonic: number) => `${uniformKey ? '' : NOTE_NAMES[tonic] + ' '}${LADDER[rung]}`
+  const name = (rung: number, tonic: number) => `${uniformKey ? '' : NOTE_NAMES[tonic] + ' '}${modeName(rung)}`
   const markers = [{ time: 0, text: name(layout.rung0, layout.tonic0) }]
   for (const f of layout.flips) {
     const now = stateAt(layout, f.time) // every step at this instant included

@@ -14,17 +14,40 @@ import { voiceSet } from './clusters'
 
 export const DEFAULT_TONIC = 2 // D (pitch class, 0 = C)
 
-// Brightest to darkest. Each step down lowers exactly one degree by a semitone.
+// Brightest to darkest. Each step down lowers one degree by a semitone — except melodic minor to
+// natural minor, which lowers two (the 6th and the 7th together).
 export const LADDER = [
   'lydian',
   'major',
   'mixolydian',
   'dorian',
+  'melodic_minor',
   'minor',
   'phrygian',
   'locrian',
 ] as const
 export type Rung = number // index into LADDER
+
+// Melodic minor is a side station, not a stop on the way: it differs from dorian by one degree
+// (the 7th) and from natural minor by two, so a walk between the modes either side of it goes
+// straight across (dorian to natural minor is one degree) and only a stop in melodic minor — or a
+// walk that starts or ends there — steps onto it.
+export const MELODIC_RUNG = LADDER.indexOf('melodic_minor')
+
+// The rung one step from `rung` on a walk between two rungs (`ends`), melodic minor skipped unless it is an end.
+export function stepRung(rung: Rung, dir: 1 | -1, ends: Rung[]): Rung {
+  const next = rung + dir
+  return next === MELODIC_RUNG && !ends.includes(MELODIC_RUNG) ? next + dir : next
+}
+
+// How many steps a walk from one rung to another takes.
+export function stepsBetween(from: Rung, to: Rung): number {
+  const skipped = Math.min(from, to) < MELODIC_RUNG && MELODIC_RUNG < Math.max(from, to)
+  return Math.abs(to - from) - (skipped ? 1 : 0)
+}
+
+// A mode as people read it (the ladder holds the scales' ids)
+export const modeName = (rung: Rung) => LADDER[rung].replace('_', ' ')
 
 // One-voice, stepwise strategies from Eddy's deck. Anything that moves several
 // voices at once, leaps ('free'), or borrows from outside the key is left out.
@@ -39,10 +62,10 @@ const GENTLE = [
 ].filter((id) => STRATEGY_MAP[id])
 
 // The interval above the tonic that tells each mode apart from its neighbours: Lydian's
-// #4, Ionian's leading tone, Mixolydian's b7, Dorian's natural 6, Aeolian's b6,
+// #4, Ionian's leading tone, Mixolydian's b7, Dorian's natural 6, melodic minor's leading tone over a minor third, Aeolian's b6,
 // Phrygian's b2, Locrian's b5. The stream keeps one on the air so the mode is heard,
 // not just implied.
-const COLOR_INTERVAL = [6, 11, 10, 9, 8, 1, 6]
+const COLOR_INTERVAL = [6, 11, 10, 9, 11, 8, 1, 6]
 
 // The pitch class that marks a mode (see above), for anything that needs to rank a chord's notes.
 export const colorPc = (rung: Rung, tonic: number) => (tonic + COLOR_INTERVAL[rung]) % 12
@@ -330,26 +353,30 @@ export class DriftEngine {
     return before
   }
 
-  // Move to an adjacent rung. The one degree that changes is a semitone shift,
-  // so each voice holding that pitch class follows it by a semitone. Returns
-  // the moves (possibly none: the change then shows up as the stream wanders).
-  shift(direction: 1 | -1): Move[] {
-    const to = this.rung + direction
-    if (to < 0 || to >= LADDER.length) return []
-    const before = pcsOf(this.rung, this.tonic)
-    const after = pcsOf(to, this.tonic)
-    const gone = [...before].find((pc) => !after.has(pc))!
-    const came = [...after].find((pc) => !before.has(pc))!
+  // Move to the next rung of a walk. The degree that changes is a semitone shift (melodic minor to
+  // natural minor changes two, both a semitone), so each voice holding such a pitch class follows it
+  // by a semitone. Returns the moves (possibly none: the change then shows up as the stream wanders).
+  shiftTo(to: Rung): Move[] {
+    if (to < 0 || to >= LADDER.length || to === this.rung) return []
+    const was = SCALE_MAP[LADDER[this.rung]].intervals
+    const now = SCALE_MAP[LADDER[to]].intervals
+    // the degrees that change: the pitch class that goes, the one that comes, and the semitone between
+    const changes = was.flatMap((iv, d) =>
+      iv === now[d] ? [] : [{ gone: (this.tonic + iv) % 12, came: (this.tonic + now[d]) % 12, by: now[d] - iv }]
+    )
     this.rung = to
-    this.pending.delete(gone)
-    this.pending.add(came)
+    for (const c of changes) {
+      this.pending.delete(c.gone)
+      this.pending.add(c.came)
+    }
 
     const moves: Move[] = []
     const next = [...this.cluster]
     next.forEach((note, i) => {
-      if (note % 12 !== gone) return
+      const c = changes.find((x) => x.gone === note % 12)
+      if (!c) return
       // Darkening lowers the degree; brightening raises it.
-      let target = note - direction
+      let target = note + c.by
       // If the semitone is already taken, take the same pitch class an octave away.
       if (next.includes(target)) target += 12 * (this.rng() < 0.5 ? 1 : -1)
       moves.push({ from: note, to: target })

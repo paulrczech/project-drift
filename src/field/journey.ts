@@ -4,7 +4,7 @@
 // library: `createJourney()` is called once, in FieldApp.
 
 import { computed, ref, shallowRef } from 'vue'
-import { LADDER } from '../engine/drift'
+import { modeName } from '../engine/drift'
 import { stateAt, type Bars, type Layout, type Variation } from '../engine/compose'
 import { TEMPO_FEEL, clampBpm, defaultBpm, type Density, type Grid } from '../engine/pulse'
 import { NOTE_NAMES } from '../engine/score'
@@ -149,7 +149,7 @@ export function createJourney() {
   const passing = computed(() => {
     const now = nowState.value
     if (!drifting.value || !info.value || !now || activeStage.value >= 0) return ' '
-    return `passing ${info.value.uniform ? '' : NOTE_NAMES[now.tonic] + ' '}${LADDER[now.rung]}`
+    return `passing ${info.value.uniform ? '' : NOTE_NAMES[now.tonic] + ' '}${modeName(now.rung)}`
   })
   const progress = computed(() =>
     drifting.value && Number.isFinite(totalSeconds.value) ? Math.min(1, Math.max(0, elapsed.value / totalSeconds.value)) : null

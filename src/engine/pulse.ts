@@ -261,7 +261,7 @@ export class PulseComposer {
       if (nf <= this.moveAt) {
         const f = this.flips[this.nextFlip++]
         if (f.kind === 'key') this.engine.modulate(f.dir)
-        else this.engine.shift(f.dir)
+        else this.engine.shiftTo(f.to!)
         this.flipped = true
       } else {
         // (on bars the cluster changes on the pattern line instead, whole)
