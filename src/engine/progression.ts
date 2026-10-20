@@ -27,6 +27,13 @@ export interface Line {
   close: boolean
 }
 
+// A pitch class stays in the chord for at most this many bars, counted from the line it came in, and
+// then the next chord leaves it (its voice goes to the nearest tone). Choral sense: a singer does not
+// hold one note longer than four bars. A chord that itself lasts longer (every 8 bars) cannot be cut by
+// this; it just never carries a pitch class across a line. Where the mode and the number of voices leave
+// no way round, a pitch class stays for one more chord.
+export const HOLD_BARS = 4
+
 const AHEAD = 64 // bars generated at a time on an endless journey
 
 export class Progression {
@@ -37,6 +44,7 @@ export class Progression {
   private rng: () => number
   private recent: string[] = []
   private previous: number[] | null = null
+  private since = new Map<number, number>() // the bar each pitch class of the sounding set came in at
   private voices: number
   private readonly bar: number
   private readonly limit: number // no line at or after this time
@@ -80,6 +88,9 @@ export class Progression {
     const close = k === this.lastBar
     this.voices = voicesFor(arousal, this.voices)
     const scale = [...pcsOf(rung, tonic)]
+    // a pitch class that would sound past HOLD_BARS if this chord kept it has to go
+    const bars = barsAt(this.layout, time)
+    const stale = opening || !this.previous ? [] : this.previous.filter((pc) => k + bars - (this.since.get(pc) ?? k) > HOLD_BARS)
     const picked = pickSet({
       scale,
       tonic,
@@ -90,6 +101,7 @@ export class Progression {
       arousal,
       tonicBass: opening || close,
       recent: this.recent,
+      stale,
       rng: this.rng,
     })
     const pcs = picked ? picked.pcs : scale.slice(0, this.voices).sort((a, b) => a - b)
@@ -97,8 +109,11 @@ export class Progression {
       this.recent.push(picked.key)
       if (this.recent.length > 4) this.recent.shift()
     }
+    const came = new Map<number, number>()
+    for (const pc of pcs) came.set(pc, !opening && this.previous?.includes(pc) ? this.since.get(pc) ?? k : k)
+    this.since = came
     this.previous = pcs
-    const line: Line = { bar: k, time, bars: barsAt(this.layout, time), rung, tonic, pcs, opening, close }
+    const line: Line = { bar: k, time, bars, rung, tonic, pcs, opening, close }
     this.lines.push(line)
     this.byBar.set(k, line)
   }

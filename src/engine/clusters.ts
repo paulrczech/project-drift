@@ -21,6 +21,7 @@ export interface SetInput {
   arousal: number // 0 still … 1 energised
   tonicBass: boolean // the set holds the tonic (the opening and the close put it in the bass)
   recent: string[] // the sets used lately
+  stale?: number[] // pitch classes that have sounded long enough: the set leaves them out where it can
   rng: () => number
 }
 
@@ -81,6 +82,16 @@ function travel(from: number[], to: number[]): number {
 }
 
 export function pickSet(p: SetInput): PickedSet | null {
+  const picked = pickSized(p)
+  if (!p.stale?.length || p.voices <= 3) return picked
+  // four notes out of seven cannot all be new when four are stale: a chord of three can be
+  const held = (pcs: number[]) => pcs.filter((pc) => p.stale!.includes(pc)).length
+  if (picked && held(picked.pcs) === 0) return picked
+  const three = pickSized({ ...p, voices: 3 })
+  return three && (!picked || held(three.pcs) < held(picked.pcs)) ? three : picked
+}
+
+function pickSized(p: SetInput): PickedSet | null {
   const k = Math.min(p.voices, p.scale.length)
   const options: { pcs: number[]; key: string; score: number }[] = []
   for (const set of subsets(p.scale, k)) {
@@ -97,6 +108,13 @@ export function pickSet(p: SetInput): PickedSet | null {
     options.push({ pcs, key, score })
   }
   if (!options.length) return null
+  // a pitch class that has sounded long enough goes: only the sets with the fewest of them stay (none, unless
+  // the mode and the voices leave no way round — the set then keeps as few as it can)
+  if (p.stale?.length) {
+    const held = (pcs: number[]) => pcs.filter((pc) => p.stale!.includes(pc)).length
+    const fewest = Math.min(...options.map((o) => held(o.pcs)))
+    for (let i = options.length - 1; i >= 0; i--) if (held(options[i].pcs) > fewest) options.splice(i, 1)
+  }
   // among the best few, a weighted draw
   options.sort((a, b) => b.score - a.score)
   const top = options.slice(0, 5)
