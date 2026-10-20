@@ -2,7 +2,8 @@
 // section, with General MIDI programs), the mode named at each change as a marker, and the key,
 // tempo and seed in the first marker so the journey can be rebuilt.
 
-import type { Score } from '../engine/score'
+import { clipsOf, type Score } from '../engine/score'
+import type { ZipFile } from './zip'
 
 export interface Provenance {
   voice: string
@@ -54,4 +55,59 @@ export function download(bytes: Uint8Array | Blob, filename: string, mime: strin
   a.download = filename
   a.click()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+// A drift as clips for a DAW's clip view: one .mid per distinct clip (a cluster of the sustained
+// voices, a four-bar phrase of the pulse), named in the order they first play with the stop's word
+// and the mode, plus arrangement.txt listing what plays on which bar. Empty when the score has
+// nowhere to cut.
+const slug = (text: string) =>
+  text
+    .toLowerCase()
+    .replace('#', 'sharp')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+
+export async function clipFiles(score: Score, info: Provenance, words: string[]): Promise<ZipFile[]> {
+  const { clips, slots } = clipsOf(score)
+  if (!clips.length) return []
+  const text = new TextEncoder()
+  const barSeconds = 240 / score.bpm
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const names = new Map<number, string>()
+  const files: ZipFile[] = []
+  for (const s of slots) {
+    if (names.has(s.clip)) continue
+    const c = clips[s.clip]
+    const name = `${pad(names.size + 1)}-${[slug(words[c.stop] ?? `stop-${c.stop + 1}`), slug(c.mode), `${c.bars}bars`].filter(Boolean).join('-')}.mid`
+    names.set(s.clip, name)
+    const label = `${words[c.stop] ?? `stop ${c.stop + 1}`}: ${c.mode}, ${c.bars} bar${c.bars > 1 ? 's' : ''}`
+    const length = c.bars * barSeconds
+    const clip: Score = {
+      ...score,
+      bpm: c.bpm,
+      tracks: c.tracks,
+      // a marker on the last tick holds the clip to its whole bars when the notes stop short
+      markers: [{ time: 0, text: label }, { time: Math.max(0, length - 0.001), text: 'end' }],
+      duration: length,
+      modes: [c.mode],
+      cuts: [],
+    }
+    files.push({ name, data: await midiBytes(clip, info) })
+  }
+  const lines = [
+    `Drift clips: ${score.key}, ${score.bpm} BPM, ${info.voice}, seed ${info.seed}`,
+    `${clips.length} clip${clips.length > 1 ? 's' : ''}, ${slots.length} place${slots.length > 1 ? 's' : ''} in the journey. Bars count from 1.`,
+    '',
+  ]
+  let stop = -1
+  for (const s of slots) {
+    if (s.stop !== stop) {
+      stop = s.stop
+      lines.push(`${stop ? '\n' : ''}stop ${stop + 1}: ${words[stop] ?? ''}`)
+    }
+    lines.push(`  bar ${String(s.bar).padStart(3)}  ${names.get(s.clip)}`)
+  }
+  files.push({ name: 'arrangement.txt', data: text.encode(lines.join('\n') + '\n') })
+  return files
 }

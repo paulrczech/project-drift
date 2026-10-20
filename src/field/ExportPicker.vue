@@ -11,11 +11,13 @@
     hasJourney: boolean
     playing: boolean // sound is playing (or still fading out)
     busy: string // '' when idle, else what is being made ("rendering 30%")
+    canClips: boolean // there are bar lines to cut on (chords on bars, or the pulse)
   }>()
   const emit = defineEmits<{
     (e: 'midi'): void
     (e: 'wav'): void
     (e: 'save'): void
+    (e: 'clips'): void
     (e: 'variations', count: number, format: 'mid' | 'wav'): void
     (e: 'open', text: string): void
   }>()
@@ -54,8 +56,9 @@
     open.value = false
     if (returnFocus) toggle.value?.focus()
   }
-  function choose(kind: 'midi' | 'wav' | 'save') {
+  function choose(kind: 'midi' | 'wav' | 'save' | 'clips') {
     if (kind === 'midi') emit('midi')
+    else if (kind === 'clips') emit('clips')
     else if (kind === 'wav') emit('wav')
     else emit('save')
     hide()
@@ -115,16 +118,20 @@
         <span class="name">MIDI</span>
         <span class="note">for a DAW</span>
       </button>
-      <button :ref="(el) => el && (items[1] = el as HTMLButtonElement)" class="option" type="button" :disabled="!canAudio" @click="choose('wav')">
+      <button :ref="(el) => el && (items[1] = el as HTMLButtonElement)" class="option" type="button" :disabled="!canSave || !canClips" @click="choose('clips')">
+        <span class="name">clips</span>
+        <span class="note">{{ !hasJourney || canClips ? 'bars, in a zip' : 'needs chords on bars' }}</span>
+      </button>
+      <button :ref="(el) => el && (items[2] = el as HTMLButtonElement)" class="option" type="button" :disabled="!canAudio" @click="choose('wav')">
         <span class="name">WAV</span>
         <span class="note">{{ !hasJourney || !playing ? 'audio' : 'when stopped' }}</span>
       </button>
-      <button :ref="(el) => el && (items[2] = el as HTMLButtonElement)" class="option" type="button" :disabled="!canSave" @click="choose('save')">
+      <button :ref="(el) => el && (items[3] = el as HTMLButtonElement)" class="option" type="button" :disabled="!canSave" @click="choose('save')">
         <span class="name">project</span>
         <span class="note">to reopen</span>
       </button>
       <button
-        :ref="(el) => el && (items[3] = el as HTMLButtonElement)"
+        :ref="(el) => el && (items[4] = el as HTMLButtonElement)"
         class="option"
         type="button"
         aria-controls="variations-panel"
@@ -151,13 +158,13 @@
             label="Format"
             @update:model-value="format = $event as 'mid' | 'wav'" />
         </label>
-        <button :ref="(el) => el && (items[4] = el as HTMLButtonElement)" class="option" type="button" :disabled="!canVariations" @click="saveVariations">
+        <button :ref="(el) => el && (items[5] = el as HTMLButtonElement)" class="option" type="button" :disabled="!canVariations" @click="saveVariations">
           <span class="name">save zip</span>
           <span class="note">{{ format === 'wav' && playing ? 'when stopped' : '' }}</span>
         </button>
       </div>
       <hr />
-      <button :ref="(el) => el && (items[5] = el as HTMLButtonElement)" class="option" type="button" :disabled="!canOpen" @click="chooseFile">
+      <button :ref="(el) => el && (items[6] = el as HTMLButtonElement)" class="option" type="button" :disabled="!canOpen" @click="chooseFile">
         <span class="name">open project</span>
         <span class="note">{{ playing ? 'when stopped' : '' }}</span>
       </button>

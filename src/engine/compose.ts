@@ -376,6 +376,7 @@ function unit(seed: number, id: number, k: number): number {
 export class Composer {
   readonly layout: Layout
   readonly marks: Mark[] = []
+  readonly clusters: { time: number; bars: number }[] = [] // each change of cluster on bars (the first is the opening), for cutting clips
   readonly held: HeldNote[] = [] // every note a voice held (complete once a finite plan is pulled to its end)
   private engine: DriftEngine
   private rng: () => number
@@ -515,6 +516,7 @@ export class Composer {
   // cluster it was in (a tone both share is held across the bar line).
   private barStep(opening = false) {
     const t = this.t
+    this.clusters.push({ time: t, bars: barsAt(this.layout, t) })
     const { flips, layout } = this
     while (this.nextFlip < flips.length && flips[this.nextFlip].time < t - 1e-6) this.flip(flips[this.nextFlip++])
     while (this.nextFlip < flips.length && flips[this.nextFlip].time <= t + 1e-6) {

@@ -3,7 +3,7 @@
 // long notes the harmony really holds, split by section for the orchestra. Pure: no Tone.
 
 import { LADDER } from './drift'
-import { Composer, arousalAt, downbeat, stateAt, type TimelinePlan } from './compose'
+import { Composer, arousalAt, downbeat, stateAt, textIndexAt, type TimelinePlan } from './compose'
 import { GRID_LABEL, PulseComposer, START, clampBpm } from './pulse'
 import { mulberry } from './rng'
 import { performerFor, type Tempo } from './performer'
@@ -30,6 +30,17 @@ export interface Score {
   key: string // the key it starts in
   uniformKey: boolean // false when the journey changes key (then each mode label carries its key)
   modes: string[] // the mode (and, if the key changes, key) of each stop, in order (repeats merged)
+  cuts: Cut[] // where the music can be cut into clips (empty: nowhere — sustained voices in free time)
+  heldCuts: boolean // a note held across a cut is kept in the clips either side (sustained voices); else only notes that begin in a clip
+}
+
+// A stretch of the file that makes a clip: a cluster on bars (sustained voices) or a four-bar phrase
+// (the pulse). Times are the file's, in seconds.
+export interface Cut {
+  start: number
+  end: number
+  stop: number // the stop whose section it falls in (the readout's switch: the middle of each walk)
+  mode: string // the mode (and key) it begins in; "a to b" when it changes inside
 }
 
 // Key names as musicians write them (Eb major, not D# major); F# is the one sharp.
@@ -147,6 +158,85 @@ export function scoreFor(
   if (performer instanceof PulseComposer)
     for (const sw of performer.switches) markers.push({ time: Math.max(0, sw.time - START), text: `grid ${GRID_LABEL[sw.grid]}` })
   markers.sort((a, b) => a.time - b.time)
+
+  // where the music can be cut into clips
+  const cuts: Cut[] = []
+  const cut = (from: number, to: number) => {
+    const a = stateAt(layout, from)
+    const b = stateAt(layout, to - 1e-6)
+    const first = name(a.rung, a.tonic)
+    const last = name(b.rung, b.tonic)
+    cuts.push({ start: Math.max(0, from - START), end: to - START, stop: textIndexAt(layout, from), mode: first === last ? first : `${first} to ${last}` })
+  }
+  if (performer instanceof Composer) {
+    // each cluster lasts its bars, or until the next one (the grid may change under it), or the end
+    const cs = performer.clusters
+    cs.forEach((c, i) => {
+      if (!c.bars) return
+      const to = Math.min(cs[i + 1]?.time ?? Infinity, c.time + c.bars * layout.barSeconds, layout.duration)
+      if (to - c.time > 0.5) cut(c.time, to)
+    })
+  } else if (performer instanceof PulseComposer) {
+    // four-bar phrases (the cell is one bar; the grid only changes on a phrase line)
+    const phrase = 4 * (240 / performer.bpm)
+    for (let from = START; from < layout.duration - 0.5; from += phrase) cut(from, Math.min(from + phrase, layout.duration))
+  }
   const modes = waypoints.map((w, i) => name(w.rung, layout.tonics[i])).filter((m, i, a) => m !== a[i - 1])
-  return { bpm, tracks, markers, duration: layout.duration, key: NOTE_NAMES[layout.tonic0], uniformKey, modes }
+  return { bpm, tracks, markers, duration: layout.duration, key: NOTE_NAMES[layout.tonic0], uniformKey, modes, cuts, heldCuts: performer instanceof Composer }
+}
+
+// ── clips ───────────────────────────────────────────────────────────────────────────
+// A score cut into clips for a DAW's clip view (Ableton Session View, Logic Live Loops): one per
+// cut, each a whole number of bars from its own start, notes clipped at its end. Clips whose notes
+// repeat exactly are one clip, used again; `slots` is the order they play in.
+
+export interface Clip {
+  bpm: number
+  bars: number
+  stop: number
+  mode: string
+  tracks: ScoreTrack[] // notes from 0
+}
+
+export interface ClipSlot {
+  clip: number // index into `clips`
+  bar: number // the bar it begins on in the whole journey, from 1
+  stop: number
+}
+
+export function clipsOf(score: Score): { clips: Clip[]; slots: ClipSlot[] } {
+  const barSeconds = 240 / score.bpm
+  const clips: Clip[] = []
+  const slots: ClipSlot[] = []
+  const seen = new Map<string, number>()
+  for (const cut of score.cuts) {
+    const bars = Math.max(1, Math.ceil((cut.end - cut.start) / barSeconds - 0.02))
+    const end = cut.start + bars * barSeconds
+    const tracks: ScoreTrack[] = []
+    for (const t of score.tracks) {
+      const notes: ScoreNote[] = []
+      for (const n of t.notes) {
+        const kept = score.heldCuts ? n.time < end - 1e-6 && n.time + n.duration > cut.start + 0.05 : n.time >= cut.start - 1e-6 && n.time < end - 1e-6
+        if (!kept) continue
+        const time = Math.max(n.time, cut.start)
+        const duration = Math.min(n.time + n.duration, end) - time
+        if (duration >= 0.05) notes.push({ midi: n.midi, time: time - cut.start, duration, velocity: n.velocity })
+      }
+      if (notes.length) tracks.push({ ...t, notes })
+    }
+    if (!tracks.length) continue
+    // the same notes at the same places are the same clip (loudness aside)
+    const key = `${bars}|${tracks.map((t) => t.name + ':' + t.notes.map((n) => `${n.midi}@${Math.round(n.time * 100)}+${Math.round(n.duration * 100)}`).join(',')).join(';')}`
+    let at = seen.get(key)
+    if (at === undefined) {
+      at = clips.length
+      seen.set(key, at)
+      clips.push({ bpm: score.bpm, bars, stop: cut.stop, mode: cut.mode, tracks })
+    } else {
+      // the louder of the two, so a note that was easing in is not what the clip keeps
+      clips[at].tracks.forEach((t, k) => t.notes.forEach((n, j) => (n.velocity = Math.max(n.velocity, tracks[k].notes[j].velocity))))
+    }
+    slots.push({ clip: at, bar: Math.round(cut.start / barSeconds) + 1, stop: cut.stop })
+  }
+  return { clips, slots }
 }

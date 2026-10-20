@@ -7,7 +7,7 @@
   import SoundPicker from './SoundPicker.vue'
   import ExportPicker from './ExportPicker.vue'
   import { NOTE_NAMES, scoreFor } from '../engine/score'
-  import { download, exportName, midiBytes } from './exportMidi'
+  import { clipFiles, download, exportName, midiBytes } from './exportMidi'
   import { zipStored, type ZipFile } from './zip'
   import { renderDriftWav } from '../engine/render'
   import { LENGTHS } from './lengths'
@@ -444,6 +444,37 @@
     }
   }
 
+  // Clips for a DAW's clip view (Ableton Session View, Logic Live Loops), in one zip: a cluster on
+  // bars for the sustained voices, a four-bar phrase for the pulse. Free time has nowhere to cut.
+  const canClips = computed(() => {
+    const L = layout.value
+    return !!info.value && (driftGrid.value !== undefined || !!L?.bars.some((b) => b > 0))
+  })
+  async function exportClips() {
+    if (!lastDrift || exporting.value) return
+    if (!canClips.value) {
+      say('Clips need chords on bars (1, 2, 4 or 8) or the pulse: free time has no bar lines to cut on.')
+      return
+    }
+    exporting.value = 'saving…'
+    try {
+      const d = lastDrift
+      const voice = VOICES[d.voiceId]
+      const score = scoreFor(voice, d.plan, d.seed, { bpm: d.bpm, grid: d.grid, density: d.density })
+      const files = await clipFiles(score, { voice: voice.label, seed: d.seed, stops: d.stops, minutes: d.minutes, feel: d.grid && d.density ? `${GRID_LABEL[d.grid]} ${d.density}` : undefined }, d.words)
+      if (!files.length) {
+        say('There was nothing to cut into clips.')
+        return
+      }
+      download(zipStored(files), exportName(d.head, d.modes, d.bpm, 'zip', `${d.voiceId}-clips`), 'application/zip')
+      say(`${files.length - 1} clips saved: ${d.head ? d.head + ' ' : ''}${d.modes.join(' to ')}.`)
+    } catch {
+      say('Sorry, the clips could not be made.')
+    } finally {
+      exporting.value = ''
+    }
+  }
+
   // The audio is rendered offline, faster than real time; it cannot run beside a live drift
   // (the offline context takes over Tone's clock), so it waits until the sound has stopped.
   async function exportWav() {
@@ -745,10 +776,12 @@
         :has-journey="!!info"
         :playing="audioActive"
         :busy="exporting"
+        :can-clips="canClips"
         @midi="exportMidi"
         @wav="exportWav"
         @save="saveProject"
         @variations="exportVariations"
+        @clips="exportClips"
         @open="openProject" />
     </div>
 
