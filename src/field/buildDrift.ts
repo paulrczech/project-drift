@@ -7,7 +7,7 @@ import { NOTE_NAMES } from '../engine/score'
 import { BARS_NAME, layoutTimeline, type Bars, type Layout, type TimelinePlan, type Variation } from '../engine/compose'
 import type { Density, Grid } from '../engine/pulse'
 import { LADDER } from '../engine/drift'
-import { timelineFromStops, toPlan, type Timeline } from '../engine/timeline'
+import { barSecondsAt, pointsOf, totalBars, timelineFromStops, toPlan, type Timeline } from '../engine/timeline'
 import { describe, type Point } from './moodPlane'
 
 export type Plan = Omit<TimelinePlan, 'rng'>
@@ -48,6 +48,7 @@ export interface DriftRecord {
   modes: string[] // one label per stage
   points: Point[]
   words: string[]
+  timeline: Timeline
 }
 
 export const ordinal = (n: number) => `stop ${n}`
@@ -67,6 +68,10 @@ export interface DriftInput {
   kept: { seed: number; key: number } | null // "keep seed"
   seedOverride: number | null // an opened project's seed, for this Begin only
   random: () => number // [0, 1), as Math.random
+  // A sketch: a timeline made elsewhere (a project file). It replaces the stops, length and tempo above
+  // (its nodes are the stops; its tempo is the drift's); the sound menu's variation and bars are then the
+  // first node's, and the key is still `rootChoice` / kept / new.
+  timeline?: Timeline
 }
 
 export interface Drift {
@@ -85,7 +90,11 @@ export interface Drift {
 }
 
 export function buildDrift(input: DriftInput): Drift {
-  const { points, minutes, voiceId, pulse, bpm } = input
+  const { voiceId, pulse } = input
+  const bpm = input.timeline?.bpm ?? input.bpm
+  const points: Point[] = input.timeline ? pointsOf(input.timeline) : input.points
+  // a sketch's length is its bars at its tempo (Infinity if its last stop stays)
+  const minutes = input.timeline ? totalBars(input.timeline) * (barSecondsAt(bpm) / 60) : input.minutes
   const wordFor = describe
   // each stop's key: the first is the journey's (chosen, or kept, or a fresh one each drift); a later stop
   // with none chosen keeps the key of the stop before it
@@ -95,9 +104,9 @@ export function buildDrift(input: DriftInput): Drift {
   )
   // Length is for the whole drift: 15% settled where you are, 30% arriving where you are going (ending in
   // the fade), the middle 55% travelling (see timelineFromStops)
-  const timeline = timelineFromStops(points, minutes, bpm, { variation: input.variation, bars: input.bars })
-  const { waypoints, walk } = toPlan(timeline, tonics)
-  const plan: Plan = { waypoints, walk, tonic: tonics[0] }
+  const timeline = input.timeline ?? timelineFromStops(points, minutes, bpm, { variation: input.variation, bars: input.bars })
+  const { waypoints, walk, sections } = toPlan(timeline, tonics)
+  const plan: Plan = { waypoints, walk, sections, tonic: tonics[0] }
   const seed = input.seedOverride ?? input.kept?.seed ?? Math.floor(input.random() * 2 ** 31)
   const grid = pulse ? input.grid : undefined
   const density = pulse ? input.density : undefined
@@ -111,7 +120,7 @@ export function buildDrift(input: DriftInput): Drift {
       stages.push({ mode, key: tonics[i], label: uniform ? mode : `${NOTE_NAMES[tonics[i]]} ${mode}`, rung: w.rung, from: i, to: i })
     }
   })
-  const layout = layoutTimeline(plan.waypoints, plan.walk, plan.tonic, bpm)
+  const layout = layoutTimeline(plan.waypoints, plan.walk, plan.tonic, bpm, plan.sections)
   // the tempo is shown where it matters: the pulse plays to it, and bars are counted in it
   const onBars = plan.waypoints.some((w) => w.bars)
   // a stop's chord setting that does not fit its stretch of the journey is eased to the longest that does
@@ -140,13 +149,15 @@ export function buildDrift(input: DriftInput): Drift {
     modes: stages.map((st) => st.label),
     points: points.map((p) => ({ ...p })),
     words,
+    timeline,
   }
+  const barsAtFirst = (plan.waypoints[0].bars ?? 0) as Bars
   const route =
     words.length === 1
       ? `in ${words[0]}`
       : `from ${words[0]}${words.length > 2 ? ` through ${words.slice(1, -1).join(', ')}` : ''} to ${words[words.length - 1]}`
   const announcement =
-    `Drifting ${route} ${lengthName(minutes)}, ${uniform ? `in ${NOTE_NAMES[tonics[0]]}` : `from ${NOTE_NAMES[tonics[0]]} to ${NOTE_NAMES[tonics[tonics.length - 1]]}`}${pulse || onBars ? `, ${bpm} beats per minute` : ''}${onBars && input.bars ? `, a new ${pulse ? 'pattern' : 'cluster'} ${BARS_NAME[input.bars]}` : ''}.` +
+    `Drifting ${route} ${input.timeline && Number.isFinite(minutes) ? `for ${Math.round(totalBars(input.timeline))} bars` : lengthName(minutes)}, ${uniform ? `in ${NOTE_NAMES[tonics[0]]}` : `from ${NOTE_NAMES[tonics[0]]} to ${NOTE_NAMES[tonics[tonics.length - 1]]}`}${pulse || onBars ? `, ${bpm} beats per minute` : ''}${onBars && barsAtFirst ? `, a new ${pulse ? 'pattern' : 'cluster'} ${BARS_NAME[barsAtFirst]}` : ''}.` +
     eased.map((e) => ` ${pulse ? 'Pattern' : 'Chords'} at ${ordinal(e.stop + 1)} eased from ${BARS_NAME[e.asked]} to ${BARS_NAME[e.got]}, to fit.`).join('')
   return { timeline, plan, seed, bpm, grid, density, voiceId, layout, readout, record, announcement, eased }
 }

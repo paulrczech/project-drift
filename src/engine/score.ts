@@ -31,6 +31,7 @@ export interface Score {
   uniformKey: boolean // false when the journey changes key (then each mode label carries its key)
   modes: string[] // the mode (and, if the key changes, key) of each stop, in order (repeats merged)
   cuts: Cut[] // where the music can be cut into clips (empty: nowhere — sustained voices in free time)
+  sections: { name: string; time: number }[] // a sketch's named sections, where each is arrived at (the file's seconds)
   heldCuts: boolean // a note held across a cut is kept in the clips either side (sustained voices); else only notes that begin in a clip
 }
 
@@ -158,6 +159,9 @@ export function scoreFor(
   // where a pulse changes its grid
   if (performer instanceof PulseComposer)
     for (const sw of performer.switches) markers.push({ time: Math.max(0, sw.time - START), text: `grid ${GRID_LABEL[sw.grid]}` })
+  // where a sketch's sections begin (pushed last, so the mode marker stays the first at a time)
+  const sections = layout.sections.filter((s) => s.name).map((s) => ({ name: s.name, time: Math.max(0, s.time - START) }))
+  for (const s of sections) markers.push({ time: s.time, text: `section ${s.name}` })
   markers.sort((a, b) => a.time - b.time)
 
   // where the music can be cut into clips
@@ -193,7 +197,7 @@ export function scoreFor(
     }
   }
   const modes = waypoints.map((w, i) => name(w.rung, layout.tonics[i])).filter((m, i, a) => m !== a[i - 1])
-  return { bpm, tracks, markers, duration: layout.duration, key: NOTE_NAMES[layout.tonic0], uniformKey, modes, cuts, heldCuts: performer instanceof Composer }
+  return { bpm, tracks, markers, duration: layout.duration, key: NOTE_NAMES[layout.tonic0], uniformKey, modes, cuts, sections, heldCuts: performer instanceof Composer }
 }
 
 // ── clips ───────────────────────────────────────────────────────────────────────────
@@ -213,6 +217,7 @@ export interface ClipSlot {
   clip: number // index into `clips`
   bar: number // the bar it begins on in the whole journey, from 1
   stop: number
+  section: number // index into the score's sections (-1: before the first, or none)
 }
 
 export function clipsOf(score: Score): { clips: Clip[]; slots: ClipSlot[] } {
@@ -247,7 +252,7 @@ export function clipsOf(score: Score): { clips: Clip[]; slots: ClipSlot[] } {
       // the louder of the two, so a note that was easing in is not what the clip keeps
       clips[at].tracks.forEach((t, k) => t.notes.forEach((n, j) => (n.velocity = Math.max(n.velocity, tracks[k].notes[j].velocity))))
     }
-    slots.push({ clip: at, bar: Math.round(cut.start / barSeconds) + 1, stop: cut.stop })
+    slots.push({ clip: at, bar: Math.round(cut.start / barSeconds) + 1, stop: cut.stop, section: score.sections.filter((x) => x.time <= cut.start + 1e-3).length - 1 })
   }
   return { clips, slots }
 }

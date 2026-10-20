@@ -53,6 +53,7 @@ import {
   type Flip,
   type Layout,
   type NoteEvent,
+  type SectionMark,
   type VoiceParams,
   type Waypoint,
 } from './compose'
@@ -83,6 +84,7 @@ export const clampBpm = (bpm: number) => Math.min(BPM_MAX, Math.max(BPM_MIN, Mat
 export interface PulsePlan extends VoiceParams {
   waypoints: Waypoint[]
   walk: number | number[]
+  sections?: SectionMark[]
   bpm?: number // the fixed tempo; by default `defaultBpm` of the journey, scaled by `tempoScale`
   tempoScale?: number // from TEMPO_FEEL
   grid?: Grid // steps per beat; default 2 (eighths)
@@ -217,7 +219,7 @@ export class PulseComposer {
     this.cellSteps = BEATS * this.grid
     this.leaving = Array(this.cellSteps).fill(false)
     this.arriving = Array(this.cellSteps).fill(1)
-    this.layout = layoutTimeline(plan.waypoints, plan.walk, plan.tonic, this.bpm)
+    this.layout = layoutTimeline(plan.waypoints, plan.walk, plan.tonic, this.bpm, plan.sections)
     this.flips = this.layout.flips
     if (this.layout.barSeconds) this.prog = new Progression(this.layout, plan.seed ?? Math.floor(this.rng() * 2 ** 31))
     this.engine = new DriftEngine({

@@ -93,6 +93,7 @@ export interface TimelinePlan {
   bpm?: number // the journey's tempo: what bars are counted in (default 60)
   spread?: number // clusters on bars: 0 tight … 1 wide voicing (default 0)
   seed?: number // the journey's seed: on bars, the progression every sound shares is drawn from it
+  sections?: SectionMark[] // a sketch's sections, as labels over the journey (see timeline.ts); the engine ignores them
   rng?: () => number
 }
 
@@ -127,6 +128,12 @@ const OPENING_STAGGER = 1.5 // seconds between the voices entering at the start
 const MIN_BEAT = 2 // the pad's fade-in is 2s; faster harmonic moves just smear
 const MAX_LAST = 7.5 // default longest final link (the samples are 8s)
 
+// A section starts at waypoint `from` (the journey's first node of it).
+export interface SectionMark {
+  name: string
+  from: number
+}
+
 export interface Walk {
   start: number
   end: number
@@ -153,6 +160,7 @@ export interface Layout {
   bars: number[] // per waypoint: clusters on bars (0: free), as far as the stop's stretch allows
   barsAsked: number[] // per waypoint: what was asked for (differs from `bars` where it did not fit)
   barSeconds: number // one bar, in seconds, when any stop is on bars (else 0)
+  sections: { name: string; from: number; time: number }[] // where each section is arrived at (the end of the walk into its first stop; 0 for the first)
   duration: number // Infinity if the last hold is Infinity
 }
 
@@ -170,7 +178,7 @@ export function fifthsBetween(from: number, to: number): number {
   return k > 6 ? k - 12 : k
 }
 
-export function layoutTimeline(waypoints: Waypoint[], walk: number | number[], startTonic = DEFAULT_TONIC, bpm?: number): Layout {
+export function layoutTimeline(waypoints: Waypoint[], walk: number | number[], startTonic = DEFAULT_TONIC, bpm?: number, sections: SectionMark[] = []): Layout {
   const walks: Walk[] = []
   const raw: Flip[] = []
   const tonics: number[] = []
@@ -289,6 +297,7 @@ export function layoutTimeline(waypoints: Waypoint[], walk: number | number[], s
     bars,
     barsAsked,
     barSeconds,
+    sections: sections.map((m) => ({ ...m, time: m.from ? walks[m.from - 1].end : 0 })),
     duration: at,
   }
 }
@@ -411,7 +420,7 @@ export class Composer {
     this.settle = this.overlap + 0.5
     this.lookahead = Math.max(...this.links) * 1.15 + this.settle + 1
     this.spread = plan.spread ?? 0
-    this.layout = layoutTimeline(plan.waypoints, plan.walk, plan.tonic, plan.bpm ?? DEFAULT_BARS_BPM)
+    this.layout = layoutTimeline(plan.waypoints, plan.walk, plan.tonic, plan.bpm ?? DEFAULT_BARS_BPM, plan.sections)
     this.flips = this.layout.flips
     this.engine = new DriftEngine({
       rung: plan.waypoints[0].rung,

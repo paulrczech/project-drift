@@ -41,7 +41,7 @@
   // tick a minute, so the queue has to outlast that.
   const LOOKAHEAD = 90
 
-  const layout = layoutTimeline(props.plan.waypoints, props.plan.walk, props.plan.tonic, props.bpm ?? DEFAULT_BARS_BPM)
+  const layout = layoutTimeline(props.plan.waypoints, props.plan.walk, props.plan.tonic, props.bpm ?? DEFAULT_BARS_BPM, props.plan.sections)
 
   type ToneModule = typeof import('tone')
   let Tone: ToneModule

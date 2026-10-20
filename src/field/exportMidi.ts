@@ -111,13 +111,17 @@ export async function clipFiles(score: Score, info: Provenance, words: string[])
     `${clips.length} clip${clips.length > 1 ? 's' : ''}, ${slots.length} place${slots.length > 1 ? 's' : ''} in the journey. Bars count from 1.`,
     '',
   ]
-  let stop = -1
+  // grouped by section when the journey has them (a sketch), else by stop
+  const bySection = score.sections.length > 0
+  let group = -2
   for (const s of slots) {
-    if (s.stop !== stop) {
-      stop = s.stop
-      lines.push(`${stop ? '\n' : ''}stop ${stop + 1}: ${words[stop] ?? ''}`)
+    const g = bySection ? s.section : s.stop
+    if (g !== group) {
+      group = g
+      const head = bySection ? (g < 0 ? 'before the first section' : `section ${g + 1}: ${score.sections[g].name}`) : `stop ${g + 1}: ${words[g] ?? ''}`
+      lines.push(`${lines.length > 3 ? '\n' : ''}${head}`)
     }
-    lines.push(`  bar ${String(s.bar).padStart(3)}  ${names.get(s.clip)}`)
+    lines.push(`  bar ${String(s.bar).padStart(3)}  ${names.get(s.clip)}${bySection ? `  (${words[s.stop] ?? `stop ${s.stop + 1}`})` : ''}`)
   }
   files.push({ name: 'arrangement.txt', data: text.encode(lines.join('\n') + '\n') })
   return files

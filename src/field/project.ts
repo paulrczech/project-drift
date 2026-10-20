@@ -4,8 +4,9 @@
 import { BARS, DEFAULT_BARS, DEFAULT_VARIATION, VARIATIONS, type Bars, type Variation } from '../engine/compose'
 import { BPM_MAX, BPM_MIN, DENSITIES, GRIDS, type Density, type Grid } from '../engine/pulse'
 import { NOTE_NAMES, SHARP_NAMES } from '../engine/score'
+import { hasSections, parseTimeline, timelineToJSON, type Timeline } from '../engine/timeline'
 
-export const PROJECT_VERSION = 4 // 2 adds the pulse's grid and density; 3 adds each stop's variation; 4 adds each stop's chords on bars
+export const PROJECT_VERSION = 5 // 2 adds the pulse's grid and density; 3 adds each stop's variation; 4 adds each stop's chords on bars; 5 a sketch's sections (only written when there are named ones: otherwise a project is still version 4)
 
 export interface Project {
   drift: number // the file format's version
@@ -24,6 +25,9 @@ export interface Project {
   density: Density | null // how many of the pulse's weak steps sound; null for sounds without a beat
   seed: number
   modes: string[] // the mode of each stop (informational)
+  // a sketch (version 5): sections of stops counted in bars, which then say the journey's stops, length and tempo
+  // (`stops` is still written, for readers that only know stops)
+  timeline?: ReturnType<typeof timelineToJSON>
 }
 
 export interface Opened {
@@ -37,6 +41,7 @@ export interface Opened {
   grid: Grid | null
   density: Density | null
   seed: number
+  timeline: Timeline | null // a sketch's sections; null for a journey of stops and a length
 }
 
 export function toProject(d: {
@@ -52,9 +57,11 @@ export function toProject(d: {
   bars: Bars // the first stop's
   seed: number
   modes: string[]
+  timeline?: Timeline // written only when it has named sections
 }): Project {
+  const sketch = d.timeline && hasSections(d.timeline) ? d.timeline : null
   return {
-    drift: PROJECT_VERSION,
+    drift: sketch ? PROJECT_VERSION : 4,
     stops: d.points.map((p, i) => ({
       valence: round(p.v),
       arousal: round(p.a),
@@ -74,6 +81,7 @@ export function toProject(d: {
     density: d.density ?? null,
     seed: d.seed,
     modes: d.modes,
+    ...(sketch ? { timeline: timelineToJSON(sketch) } : {}),
   }
 }
 
@@ -125,10 +133,16 @@ export function parseProject(
       : lengths.filter(Number.isFinite).reduce((a, b) => (Math.abs(b - wanted) < Math.abs(a - wanted) ? b : a))
   const bpm = isNum(raw.bpm) ? Math.min(BPM_MAX, Math.max(BPM_MIN, Math.round(raw.bpm))) : null
   // files from before the grid and density were chosen have none: they were played on eighths, by arousal
+  let timeline: Timeline | null = null
+  if (raw.timeline !== undefined && raw.timeline !== null) {
+    const t = parseTimeline(raw.timeline, [BPM_MIN, BPM_MAX])
+    if (!t.ok) return { ok: false, reason: t.reason }
+    timeline = t.timeline
+  }
   const grid = GRIDS.includes(raw.grid) ? (raw.grid as Grid) : bpm === null ? null : 2
   const density = DENSITIES.includes(raw.density) ? (raw.density as Density) : bpm === null ? null : 'auto'
   return {
     ok: true,
-    project: { stops, variation, bars, minutes, root, voice: typeof raw.voice === 'string' ? raw.voice : '', bpm, grid, density, seed: Math.floor(raw.seed) },
+    project: { stops, variation, bars, minutes, root, voice: typeof raw.voice === 'string' ? raw.voice : '', bpm, grid, density, seed: Math.floor(raw.seed), timeline },
   }
 }

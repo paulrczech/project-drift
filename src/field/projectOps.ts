@@ -28,6 +28,7 @@ export function useProjectOps(j: Journey) {
       bars: d.plan.waypoints[0]?.bars ?? DEFAULT_BARS,
       seed: d.seed,
       modes: d.modes,
+      timeline: d.timeline,
     })
     const name = exportName(d.head, d.modes, d.bpm, 'drift.json')
     download(new TextEncoder().encode(JSON.stringify(project, null, 2) + '\n'), name, 'application/json')
@@ -61,7 +62,7 @@ export function useProjectOps(j: Journey) {
     warmUp()
     j.seedOverride.value = p.seed
     j.kept.value = null
-    say(`Project opened: ${p.stops.length === 1 ? '1 stop' : `${p.stops.length} stops`}, ${NOTE_NAMES[p.root]}. Press begin.`)
+    say(`Project opened: ${p.stops.length === 1 ? '1 stop' : `${p.stops.length} stops`}, ${NOTE_NAMES[p.root]}. Press begin.${p.timeline ? ' Its sections are not shown yet; it plays as stops.' : ''}`)
   }
 
   return { saveProject, openProject }

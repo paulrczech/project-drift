@@ -9,8 +9,8 @@
 // journey, and the walk that ends a section is as long as its node says — 0 bars is a cut on the
 // bar line (the whole chord changes at once, still voice-led).
 
-import type { Bars, Variation, Waypoint } from './compose'
-import type { Density, Grid } from './pulse'
+import { BARS, DEFAULT_BARS, DEFAULT_VARIATION, START, VARIATIONS, type Bars, type Variation, type Waypoint } from './compose'
+import { DENSITIES, GRIDS, type Density, type Grid } from './pulse'
 import { rungFor } from './moods'
 
 export interface Node {
@@ -72,7 +72,9 @@ export function toPlan(t: Timeline, tonics: number[]): TimelineShape {
     grid: n.grid,
     density: n.density,
     bars: n.bars,
-    hold: n.holdSeconds ?? n.holdBars * bar,
+    // bar 1 is START seconds into the music, so the first stop's settle carries them: every later stop
+    // then begins on a bar line, and so does each section
+    hold: n.holdSeconds ?? n.holdBars * bar + (i === 0 ? START : 0),
   }))
   const walks = nodes.slice(0, -1).map((n) => n.walkSeconds ?? n.walkBars * bar)
   const equal = walks.every((w) => w === walks[0])
@@ -135,4 +137,84 @@ export function timelineFromStops(
     )
   }
   return { bpm, sections: [{ name: '', nodes }] }
+}
+
+// ── as a file ─────────────────────────────────────────────────────────────────────────
+
+export const hasSections = (t: Timeline) => t.sections.some((s) => s.name)
+
+// the stops a timeline passes through, as the field holds them
+export const pointsOf = (t: Timeline) =>
+  nodesOf(t).map((n) => ({
+    v: n.v,
+    a: n.a,
+    ...(n.key === undefined ? {} : { key: n.key }),
+    ...(n.grid === undefined ? {} : { grid: n.grid }),
+    ...(n.density === undefined ? {} : { density: n.density }),
+    ...(n.variation === undefined ? {} : { variation: n.variation }),
+    ...(n.bars === undefined ? {} : { bars: n.bars }),
+  }))
+
+const round = (n: number) => Math.round(n * 10000) / 10000
+
+// JSON has no Infinity: a node that stays has a null hold. Exact seconds (Journeyer's) are not kept:
+// a file holds bars.
+export function timelineToJSON(t: Timeline) {
+  return {
+    bpm: t.bpm,
+    sections: t.sections.map((s) => ({
+      name: s.name,
+      nodes: s.nodes.map((n) => ({
+        v: round(n.v),
+        a: round(n.a),
+        key: n.key ?? null,
+        grid: n.grid ?? null,
+        density: n.density ?? null,
+        variation: n.variation ?? null,
+        bars: n.bars ?? null,
+        holdBars: Number.isFinite(n.holdBars) ? round(n.holdBars) : null,
+        walkBars: round(n.walkBars),
+      })),
+    })),
+  }
+}
+
+export const MAX_SECTIONS = 32
+export const MAX_NODES = 64
+
+// Reads a timeline from a file; anything wrong is turned away with a reason.
+export function parseTimeline(raw: any, bpmRange: [number, number]): { ok: true; timeline: Timeline } | { ok: false; reason: string } {
+  const no = (reason: string) => ({ ok: false as const, reason })
+  const isNum = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x)
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.sections) || !raw.sections.length) return no('That project has no sections.')
+  if (!isNum(raw.bpm) || raw.bpm < bpmRange[0] || raw.bpm > bpmRange[1]) return no('That project has no tempo.')
+  if (raw.sections.length > MAX_SECTIONS) return no('That project has too many sections.')
+  const sections: Section[] = []
+  let count = 0
+  for (const rs of raw.sections) {
+    if (!rs || !Array.isArray(rs.nodes) || !rs.nodes.length) return no('That project has an empty section.')
+    const nodes: Node[] = []
+    for (const rn of rs.nodes) {
+      count++
+      if (!rn || !isNum(rn.v) || !isNum(rn.a) || rn.v < 0 || rn.v > 1 || rn.a < 0 || rn.a > 1) return no('That project has a stop that is not on the field.')
+      if (!isNum(rn.walkBars) || rn.walkBars < 0) return no('That project has a walk with no length.')
+      const stays = rn.holdBars === null
+      if (!stays && (!isNum(rn.holdBars) || rn.holdBars <= 0)) return no('That project has a stop with no length.')
+      const node: Node = { v: rn.v, a: rn.a, holdBars: stays ? Infinity : rn.holdBars, walkBars: rn.walkBars }
+      if (Number.isInteger(rn.key) && rn.key >= 0 && rn.key <= 11) node.key = rn.key
+      if (GRIDS.includes(rn.grid)) node.grid = rn.grid
+      if (DENSITIES.includes(rn.density)) node.density = rn.density
+      if (VARIATIONS.includes(rn.variation)) node.variation = rn.variation
+      if (BARS.includes(rn.bars)) node.bars = rn.bars
+      nodes.push(node)
+    }
+    sections.push({ name: typeof rs.name === 'string' ? rs.name.slice(0, 40) : '', nodes })
+  }
+  if (count > MAX_NODES) return no('That project has too many stops.')
+  const all = sections.flatMap((s) => s.nodes)
+  // only the last node may stay; the first has its variation and bars set
+  if (all.slice(0, -1).some((n) => !Number.isFinite(n.holdBars))) return no('Only the last stop can stay.')
+  all[0].variation ??= DEFAULT_VARIATION
+  all[0].bars ??= DEFAULT_BARS
+  return { ok: true, timeline: { bpm: raw.bpm, sections } }
 }
