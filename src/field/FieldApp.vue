@@ -1,5 +1,5 @@
 <script setup lang="ts">
-  import { computed, defineAsyncComponent, ref, watch } from 'vue'
+  import { computed, defineAsyncComponent, ref } from 'vue'
   import FieldBackground from './FieldBackground.vue'
   import MoodField from './MoodField.vue'
   import JourneyRing from './JourneyRing.vue'
@@ -12,10 +12,10 @@
   import { renderDriftWav } from '../engine/render'
   import { LENGTHS } from './lengths'
   import { parseProject, toProject } from './project'
-  import { buildDrift } from './buildDrift'
   import { createJourney, MAX_POINTS, settingsOf } from './journey'
   import { useSoundOps } from './soundOps'
   import { useStopOps } from './stopOps'
+  import { useDriftOps } from './driftOps'
   import { loadPlayer, warmUp } from './warmUp'
   import { paletteAt, palettePath, inkFor } from './moodPlane'
   import { DEFAULT_BARS, DEFAULT_VARIATION } from '../engine/compose'
@@ -27,71 +27,18 @@
   const j = createJourney()
   const {
     announcement, say, points, preview, minutes, voiceId, tempoFeel, customBpm, effectiveBpm, gridChoice, densityChoice,
-    variationChoice, barsChoice, rootChoice, isPulse, drifting, position, elapsed, totalSeconds, plan, seed, audioActive,
-    session, driftBpm, driftGrid, driftDensity, driftVoice, layout, info, exporting, kept, lastDrift, seedOverride, reset,
+    variationChoice, barsChoice, rootChoice, isPulse, drifting, position, plan, seed, audioActive,
+    session, driftBpm, driftGrid, driftDensity, driftVoice, info, exporting, kept, lastDrift, seedOverride, reset,
     barsOn, stopKeys, stopGrids, stopDensities, stopVariations, stopBars, activeStage, passing, progress,
   } = j
   const fieldRef = ref<{ focus: () => void } | null>(null)
+  const playerRef = ref<{ stopDrift: () => void } | null>(null)
   const sound = useSoundOps(j)
+  const { begin, onProgress, stop, onEnded, keepSeed } = useDriftOps(j, { stopPlayer: () => playerRef.value?.stopDrift() })
   const { chooseVoice, chooseTempo, chooseBpm, chooseGrid, chooseDensity, chooseVariation, chooseBars, chooseRoot } = sound
   const { choose, remove, clear, setFromWords, setStopKey, setStopGrid, setStopDensity, setStopVariation, setStopBars } = useStopOps(j, sound, {
     focusField: () => fieldRef.value?.focus(),
   })
-  let audioTeardown: number | undefined
-  const playerRef = ref<{ stopDrift: () => void } | null>(null)
-
-  // ── choosing ────────────────────────────────────────────────────────────────────────
-  function keepSeed() {
-    if (kept.value) {
-      kept.value = null
-      say('Seed released: each Begin draws a new one.')
-    } else if (lastDrift.value) {
-      kept.value = { seed: lastDrift.value.seed, key: lastDrift.value.plan.tonic ?? 0 }
-      say(`Seed ${lastDrift.value.seed} kept, in ${NOTE_NAMES[kept.value.key]}. Begin again, on any sound, to hear it again.`)
-    }
-  }
-  // ── a drift ─────────────────────────────────────────────────────────────────────────
-  function begin() {
-    if (!points.value.length || drifting.value) return
-    clearTimeout(audioTeardown)
-    const forcedSeed = seedOverride.value
-    reset()
-    const d = buildDrift({
-      points: points.value,
-      minutes: minutes.value,
-      voiceId: voiceId.value,
-      pulse: VOICES[voiceId.value]?.style === 'pulse',
-      bpm: effectiveBpm.value,
-      grid: gridChoice.value,
-      density: densityChoice.value,
-      variation: variationChoice.value,
-      bars: barsChoice.value,
-      rootChoice: rootChoice.value,
-      kept: kept.value,
-      seedOverride: forcedSeed,
-      random: Math.random,
-    })
-    plan.value = d.plan
-    seed.value = d.seed
-    driftBpm.value = d.bpm
-    totalSeconds.value = d.layout.duration
-    driftVoice.value = d.voiceId
-    driftGrid.value = d.grid
-    driftDensity.value = d.density
-    layout.value = d.layout
-    info.value = d.readout
-    lastDrift.value = d.record
-    session.value++
-    audioActive.value = true
-    drifting.value = true
-    preview.value = null
-    say(d.announcement)
-  }
-
-  function onProgress(newPosition: number, _text: number, seconds: number) {
-    position.value = newPosition
-    elapsed.value = seconds
-  }
 
   function saveProject() {
     if (!lastDrift.value) return
@@ -221,30 +168,6 @@
     } finally {
       exporting.value = ''
     }
-  }
-
-  watch(activeStage, (i, before) => {
-    if (drifting.value && i >= 0 && i !== before && info.value) say(`Now in ${info.value.stages[i].label}.`)
-  })
-
-  function finish(announce: string) {
-    drifting.value = false
-    // unmount after the audio has finished fading, or it is cut mid-fade
-    audioTeardown = window.setTimeout(() => (audioActive.value = false), 3100)
-    say(announce)
-  }
-
-  function stop() {
-    playerRef.value?.stopDrift()
-    // the colours return to the start, but what was drifted stays on screen (and can be exported)
-    const kept = info.value
-    reset()
-    info.value = kept
-    finish('The drift has ended.')
-  }
-
-  function onEnded() {
-    finish('The drift has ended. You have arrived.')
   }
 
   // ── what the screen looks like ──────────────────────────────────────────────────────
