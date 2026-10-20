@@ -23,9 +23,10 @@ export function performerFor(
   voice: Voice,
   plan: Omit<TimelinePlan, 'rng'>,
   rng: () => number,
-  tempo: Tempo = {}
+  tempo: Tempo = {},
+  seed?: number // the journey's seed: the harmony on bars is drawn from it, the same for every sound
 ): Performer {
-  const params = { register: voice.register, span: voice.span, ceiling: voice.ceiling, rng }
+  const params = { register: voice.register, span: voice.span, ceiling: voice.ceiling, rng, seed }
   if (voice.style === 'pulse')
     return new PulseComposer({ ...plan, ...params, bpm: tempo.bpm, tempoScale: TEMPO_FEEL[tempo.feel ?? 'medium'], grid: tempo.grid, density: tempo.density })
   return new Composer({

@@ -10,7 +10,7 @@ import { SCALE_MAP, getScaleNotes } from './eddy/scales'
 import { STRATEGY_MAP } from './eddy/strategies'
 import { generateCandidates } from './eddy/voiceLeading'
 import { type Cluster, sortCluster } from './eddy/noteUtils'
-import { pickCluster } from './clusters'
+import { voiceSet } from './clusters'
 
 export const DEFAULT_TONIC = 2 // D (pitch class, 0 = C)
 
@@ -79,7 +79,7 @@ export function rootNear(tonic: number, near = 50): number {
   return best
 }
 
-function pcsOf(rung: Rung, tonic: number): Set<number> {
+export function pcsOf(rung: Rung, tonic: number): Set<number> {
   return new Set(SCALE_MAP[LADDER[rung]].intervals.map((i) => (tonic + i) % 12))
 }
 
@@ -100,7 +100,7 @@ const clamp01 = (x: number) => Math.min(1, Math.max(0, x))
 // Seconds between harmonic moves: slow when still, brisk when energised.
 export const beatFor = (arousal: number) => lerp(9, 3.5, clamp01(arousal))
 // Two enter above, one leave below: a little hysteresis so it does not flutter.
-const voicesFor = (arousal: number, current: number) =>
+export const voicesFor = (arousal: number, current: number) =>
   arousal >= 0.33 ? 4 : arousal < 0.27 ? 3 : current
 
 // Voicings stay open at the bottom and may close up higher, as in Eddy's seed rules.
@@ -126,7 +126,6 @@ export class DriftEngine {
   arousal: number
   private rng: () => number
   private recent: string[] = []
-  private recentSets: string[] = [] // the pitch-class sets of the clusters chosen on bars
   // Pitch classes the last mode change introduced that no voice has sounded yet.
   // The stream goes for these first, so a transition is heard, not just implied.
   pending = new Set<number>()
@@ -306,32 +305,25 @@ export class DriftEngine {
     return null
   }
 
-  // Clusters on bars: the whole cluster changes at once. A new set of the mode's pitch classes is
-  // chosen (see clusters.ts) and every voice goes to the nearest tone of it; `opening` (nothing
-  // sounds yet) and `close` put the tonic in the bass. Returns the cluster it left.
-  recluster(opts: { spread: number; opening?: boolean; close?: boolean }): Cluster {
+  // Clusters on bars: the whole cluster changes at once, to a set of pitch classes chosen elsewhere
+  // (progression.ts: one progression for every sound). Every voice goes to the nearest tone of it
+  // in this voice's window; `opening` (nothing sounds yet) and `close` put the tonic in the bass.
+  // Returns the cluster it left.
+  follow(pcs: number[], opts: { spread: number; opening?: boolean; close?: boolean }): Cluster {
     const before = this.cluster
-    const picked = pickCluster({
-      scale: [...pcsOf(this.rung, this.tonic)],
+    const next = voiceSet({
+      pcs,
       tonic: this.tonic,
-      colour: (this.tonic + COLOR_INTERVAL[this.rung]) % 12,
-      third: this.modeThird,
       previous: opts.opening ? null : before,
-      voices: voicesFor(this.arousal, before.length),
       low: this.low,
       high: this.high,
       center: this.center,
-      arousal: this.arousal,
       spread: opts.spread,
       tonicBass: !!(opts.opening || opts.close),
-      recent: this.recentSets,
       ok: (c) => wellSpaced(c, this.calm),
-      rng: this.rng,
     })
-    if (picked) {
-      this.cluster = picked.cluster
-      this.recentSets.push(picked.key)
-      if (this.recentSets.length > 4) this.recentSets.shift()
+    if (next) {
+      this.cluster = next
       this.remember()
       this.pending.clear()
     }

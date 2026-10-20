@@ -152,7 +152,7 @@
     )
     if (halted) return
 
-    composer = performerFor(voice, props.plan, mulberry(props.seed), { bpm: props.bpm, grid: props.grid, density: props.density })
+    composer = performerFor(voice, props.plan, mulberry(props.seed), { bpm: props.bpm, grid: props.grid, density: props.density }, props.seed)
     t0 = Tone.now() + 0.3
     master.gain.setValueAtTime(0, Tone.now())
     master.gain.linearRampToValueAtTime(LEVEL, t0 + FADE)

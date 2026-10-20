@@ -12,6 +12,7 @@
 
 import type { Density, Grid } from './pulse'
 import { DEFAULT_TONIC, DriftEngine, beatFor, type Move, type Rung } from './drift'
+import { Progression, type Line } from './progression'
 
 export const START = 0.3 // seconds before the first pulse of the pulse, and the first bar line of a pad on bars
 
@@ -91,6 +92,7 @@ export interface TimelinePlan {
   beat?: number // fixed seconds between harmonic moves; by default arousal sets it
   bpm?: number // the journey's tempo: what bars are counted in (default 60)
   spread?: number // clusters on bars: 0 tight … 1 wide voicing (default 0)
+  seed?: number // the journey's seed: on bars, the progression every sound shares is drawn from it
   rng?: () => number
 }
 
@@ -106,6 +108,7 @@ export interface VoiceParams {
   overlap?: number // seconds an old strike goes on after the next one starts (default: attack)
   maxHold?: number
   beat?: number
+  seed?: number
   rng?: () => number
 }
 
@@ -396,6 +399,7 @@ export class Composer {
   private nextFlip = 0
   private finished = false
   private spread: number
+  private prog: Progression | null = null // on bars: the progression every sound shares
 
   constructor(plan: TimelinePlan) {
     this.rng = plan.rng ?? Math.random
@@ -419,10 +423,12 @@ export class Composer {
       rng: this.rng,
     })
     this.linkSeed = Math.floor(this.rng() * 2 ** 31)
-    if (barsAt(this.layout, 0)) {
+    if (this.layout.barSeconds) this.prog = new Progression(this.layout, plan.seed ?? Math.floor(this.rng() * 2 ** 31))
+    const first = this.prog?.firstFrom(START)
+    if (first && first.line.bar === 0) {
       // on bars from the start: the opening cluster sounds together on the first downbeat
       this.t = START
-      this.barStep(true)
+      this.barStep(first)
       return
     }
     this.engine.cluster.forEach((note, i) => this.begin(note, i * OPENING_STAGGER))
@@ -511,12 +517,13 @@ export class Composer {
     for (const n of cluster) if (!this.open.has(n)) this.begin(n, f.time)
   }
 
-  // Clusters on bars: this.t is a downbeat. Steps made earlier sound at their own time; those on
-  // the downbeat are made together with the new cluster, which every voice reaches from the
-  // cluster it was in (a tone both share is held across the bar line).
-  private barStep(opening = false) {
-    const t = this.t
-    this.clusters.push({ time: t, bars: barsAt(this.layout, t) })
+  // Clusters on bars: this.t is a bar line of the progression. Steps made earlier sound at their own
+  // time; those on the line are made together with the new cluster, which every voice reaches from
+  // the cluster it was in (a tone both share is held across the bar line). The chord itself is the
+  // progression's, the same for every sound; this voice only voices it.
+  private barStep({ line, index }: { line: Line; index: number }) {
+    const t = line.time
+    this.clusters.push({ time: t, bars: line.bars })
     const { flips, layout } = this
     while (this.nextFlip < flips.length && flips[this.nextFlip].time < t - 1e-6) this.flip(flips[this.nextFlip++])
     while (this.nextFlip < flips.length && flips[this.nextFlip].time <= t + 1e-6) {
@@ -526,23 +533,27 @@ export class Composer {
       this.marks.push({ time: f.time, kind: 'shift', rung: this.engine.rung })
     }
     this.engine.setArousal(arousalAt(layout, t))
-    const n = barsAt(layout, t)
-    const close = Number.isFinite(layout.duration) && downbeat(layout, t, n, true) >= layout.duration - 4
-    this.engine.recluster({ spread: this.spread, opening, close })
+    this.engine.follow(line.pcs, { spread: this.spread, opening: line.opening, close: line.close })
     const cluster = this.engine.cluster
     for (const note of [...this.open.keys()]) if (!cluster.includes(note)) this.finishNote(note, t)
     for (const note of cluster) if (!this.open.has(note)) this.begin(note, t)
-    this.t = downbeat(layout, t, n, true)
+    // on to the next line (after the last, where the stop's chord would have ended)
+    this.t = this.prog!.after(index)?.time ?? t + line.bars * layout.barSeconds
   }
 
   private advance(target: number) {
     // no harmonic moves in the last 4 seconds of a finite plan, however it is chunked
     const limit = Math.min(target, this.layout.duration - 4)
     while (this.t < limit) {
-      const n = barsAt(this.layout, this.t)
-      if (n) {
-        this.t = downbeat(this.layout, this.t, n) // (a free stretch ends on the next downbeat)
-        if (this.t < limit) this.barStep()
+      if (barsAt(this.layout, this.t)) {
+        // (a free stretch ends on the next line)
+        const next = this.prog!.firstFrom(this.t)
+        if (!next) {
+          this.t = limit
+          continue
+        }
+        this.t = next.line.time
+        if (this.t < limit) this.barStep(next)
         continue
       }
       while (this.nextFlip < this.flips.length && this.flips[this.nextFlip].time <= this.t)

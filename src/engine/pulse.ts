@@ -42,6 +42,7 @@
 
 import { DriftEngine, LADDER, beatFor, colorPc, rootNear, thirdPc } from './drift'
 import { getScaleNotes } from './eddy/scales'
+import { Progression, type Line } from './progression'
 import {
   arousalAt,
   barsAt,
@@ -190,6 +191,7 @@ export class PulseComposer {
   readonly switches: { time: number; grid: Grid }[] = [] // where the grid changed, for the score's markers
   readonly clusters: { time: number; bars: number }[] = [] // each change of pattern on bars (the first is the opening), for cutting clips
   private flipped = false // a mode or key step was made since the last bar began
+  private prog: Progression | null = null // on bars: the progression every sound shares
   private cellSteps: number // steps in the cell
   private shown: Cell = []
   private leaving: boolean[] // softening before a substitution
@@ -217,6 +219,7 @@ export class PulseComposer {
     this.arriving = Array(this.cellSteps).fill(1)
     this.layout = layoutTimeline(plan.waypoints, plan.walk, plan.tonic, this.bpm)
     this.flips = this.layout.flips
+    if (this.layout.barSeconds) this.prog = new Progression(this.layout, plan.seed ?? Math.floor(this.rng() * 2 ** 31))
     this.engine = new DriftEngine({
       rung: plan.waypoints[0].rung,
       tonic: this.layout.tonic0,
@@ -380,32 +383,13 @@ export class PulseComposer {
   }
 
   // ── a new cycle: change the cell by one substitution at a time ──────────────────────
-  // On bars, at a pattern line: the whole cluster changes (steps due on this bar line are already
-  // made). Nothing changes in the last seconds of a finite journey. Returns whether it changed.
-  private patternLine(n: number): boolean {
-    const d = this.layout.duration
-    const t = this.barAt
-    if (Number.isFinite(d) && t >= d - 4) return false
-    const close = Number.isFinite(d) && t + n * this.layout.barSeconds >= d - 4
-    this.engine.setArousal(arousalAt(this.layout, t))
-    // The cell plays only some of the cluster (the top pitch classes, and a shape that skips a tone),
-    // so a new cluster can leave the cell as it was. Draw again, a few times, until the beats play at
-    // least two pitches they did not play (the passing notes between do not count); failing that, the
-    // draw that changes the most.
-    const before = this.engine.cluster
-    const beats = (cell: Cell) => cell.filter((x, j) => x !== null && j % this.grid === 0)
-    const was = new Set(beats(this.shown))
-    let best = { cluster: before, fresh: -1 }
-    for (let tries = 0; tries < 8; tries++) {
-      this.engine.cluster = before
-      this.engine.recluster({ spread: 0, opening: this.cycle === 0, close })
-      const fresh = this.cycle === 0 ? 2 : new Set(beats(this.targetCell()).filter((x) => !was.has(x))).size
-      if (fresh > best.fresh) best = { cluster: this.engine.cluster, fresh }
-      if (fresh >= 2) break
-    }
-    this.engine.cluster = best.cluster
-    this.clusters.push({ time: t, bars: n })
-    return true
+  // On bars, at a pattern line: the whole cluster changes, to the progression's chord (steps due on
+  // this bar line are already made). Nothing changes in the last seconds of a finite journey (the
+  // progression has no lines there).
+  private patternLine(line: Line) {
+    this.engine.setArousal(arousalAt(this.layout, this.barAt))
+    this.engine.follow(line.pcs, { spread: 0, opening: line.opening, close: line.close })
+    this.clusters.push({ time: this.barAt, bars: line.bars })
   }
 
   private startCycle() {
@@ -415,14 +399,16 @@ export class PulseComposer {
     const inPhrase = this.cycle % PHRASE
     // bars: the pattern lines are every n-th bar from the start (the cell is one bar)
     const n = barsAt(this.layout, this.barAt)
-    const line = n > 0 && this.cycle % n === 0
+    const ln = n > 0 ? this.prog?.atBar(this.cycle) : undefined // the progression's line at this bar, if any
+    const line = !!ln
     // flowing: on every phrase line the arpeggio takes another shape (its notes follow one by one;
     // on bars, only where a pattern also begins)
     if (level === 'flowing' && this.cycle > 0 && inPhrase === 0 && (n === 0 || line))
       this.templateIdx =
         (this.templateIdx + 1 + Math.floor(unit(this.seed, phrase + 1299709) * (ALL_TEMPLATES.length - 1))) % ALL_TEMPLATES.length
-    const changed = line && this.patternLine(n)
-    const rebuild = changed || (n > 0 && this.flipped) // a step off the line still rebuilds the cell, at the next bar
+    if (ln) this.patternLine(ln)
+    // a step off the line (or one made while the stop before was free) still rebuilds the cell, at the next bar
+    const rebuild = line || (n > 0 && (this.flipped || this.shown.some((x) => x !== null && !this.inMode(x))))
     this.flipped = false
     const target = this.targetCell()
 

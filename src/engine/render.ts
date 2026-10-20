@@ -40,7 +40,7 @@ export async function renderDriftWav(
   const SEG = cut.segment ?? SEGMENT
   const LEAD = cut.pre ?? PRE
   const waypoints = plan.waypoints.map((w) => ({ ...w, hold: Number.isFinite(w.hold) ? w.hold : ENDLESS_TAIL }))
-  const performer = performerFor(voice, { ...plan, waypoints }, mulberry(seed), tempo)
+  const performer = performerFor(voice, { ...plan, waypoints }, mulberry(seed), tempo, seed)
   const layout = performer.layout
   const events = performer.pull(Infinity)
   const seconds = layout.duration

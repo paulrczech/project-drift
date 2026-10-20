@@ -79,7 +79,7 @@ export function scoreFor(
   // a finite copy of the plan
   const waypoints = plan.waypoints.map((w) => ({ ...w, hold: Number.isFinite(w.hold) ? w.hold : ENDLESS_TAIL }))
   const finite = { ...plan, waypoints }
-  const performer = performerFor(voice, finite, mulberry(seed), tempo)
+  const performer = performerFor(voice, finite, mulberry(seed), tempo, seed)
   const layout = performer.layout
   const events = performer.pull(Infinity)
   const tracks: ScoreTrack[] = []
