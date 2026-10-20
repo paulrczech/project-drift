@@ -1,5 +1,5 @@
 <script setup lang="ts">
-  import { computed, defineAsyncComponent, ref, shallowRef, watch } from 'vue'
+  import { computed, defineAsyncComponent, ref, watch } from 'vue'
   import FieldBackground from './FieldBackground.vue'
   import MoodField from './MoodField.vue'
   import JourneyRing from './JourneyRing.vue'
@@ -12,28 +12,13 @@
   import { renderDriftWav } from '../engine/render'
   import { LENGTHS } from './lengths'
   import { parseProject, toProject } from './project'
-  import { buildDrift, ordinal, type DriftRecord, type Plan, type Readout } from './buildDrift'
-  import {
-    describe,
-    paletteAt,
-    palettePath,
-    inkFor,
-    type Point,
-  } from './moodPlane'
-  import { BARS_NAME, DEFAULT_BARS, DEFAULT_VARIATION, stateAt, type Bars, type Layout, type Variation } from '../engine/compose'
-  import { GRID_LABEL, GRID_NAME, TEMPO_FEEL, clampBpm, defaultBpm, type Density, type Grid } from '../engine/pulse'
-  import { LADDER } from '../engine/drift'
-
+  import { buildDrift, ordinal } from './buildDrift'
+  import { createJourney, MAX_POINTS, settingsOf } from './journey'
+  import { describe, paletteAt, palettePath, inkFor, type Point } from './moodPlane'
+  import { BARS_NAME, DEFAULT_BARS, DEFAULT_VARIATION, type Bars, type Variation } from '../engine/compose'
+  import { GRID_LABEL, GRID_NAME, clampBpm, type Density, type Grid } from '../engine/pulse'
   import {
     VOICES,
-    currentCustomBpm,
-    currentDensity,
-    currentGrid,
-    currentRoot,
-    currentTempoFeel,
-    currentBars,
-    currentVariation,
-    currentVoiceId,
     preloadVoice,
     rememberCustomBpm,
     rememberDensity,
@@ -56,8 +41,18 @@
     preloadVoice(voiceFromLocation())
   }
 
-  // The sound: remembered between visits, applied to the next drift.
-  const voiceId = ref(currentVoiceId())
+  const j = createJourney()
+  const {
+    announcement, say, points, preview, minutes, voiceId, tempoFeel, customBpm, effectiveBpm, gridChoice, densityChoice,
+    variationChoice, barsChoice, rootChoice, isPulse, drifting, position, elapsed, totalSeconds, plan, seed, audioActive,
+    session, driftBpm, driftGrid, driftDensity, driftVoice, layout, info, exporting, kept, lastDrift, seedOverride, reset,
+    barsOn, stopKeys, stopGrids, stopDensities, stopVariations, stopBars, activeStage, passing, progress,
+  } = j
+  const wordFor = describe
+  let audioTeardown: number | undefined
+  const playerRef = ref<{ stopDrift: () => void } | null>(null)
+  const fieldRef = ref<{ focus: () => void } | null>(null)
+
   function chooseVoice(id: string) {
     voiceId.value = id
     rememberVoice(id)
@@ -65,22 +60,6 @@
     say(`Sound: ${VOICES[id].label}.`)
   }
 
-  // The tempo is fixed for the whole journey. By default it comes from the stops' mean arousal,
-  // scaled by slow / medium / fast; or the listener types an exact BPM. The pulse plays to it; the
-  // other sounds have no beat, but their exported files are written at it, so files of every sound
-  // line up in a DAW.
-  const tempoFeel = ref<TempoFeelName>(currentTempoFeel())
-  const customBpm = ref<number | null>(currentCustomBpm())
-  const effectiveBpm = computed(
-    () =>
-      customBpm.value ??
-      clampBpm(
-        defaultBpm(
-          points.value.length ? points.value.map((p) => ({ arousal: p.a })) : [{ arousal: 0.4 }],
-          TEMPO_FEEL[tempoFeel.value]
-        )
-      )
-  )
   function chooseTempo(feel: TempoFeelName) {
     tempoFeel.value = feel
     customBpm.value = null
@@ -92,11 +71,6 @@
     rememberCustomBpm(customBpm.value)
     say(`Tempo: ${customBpm.value} BPM.`)
   }
-  const driftBpm = ref<number | undefined>(undefined) // the tempo this drift was started with (all sounds)
-
-  // The pulse's grid (steps per beat) and density (how many of the weak steps sound), fixed for the journey.
-  const gridChoice = ref<Grid>(currentGrid())
-  const densityChoice = ref<Density>(currentDensity())
   function chooseGrid(grid: Grid) {
     gridChoice.value = grid
     rememberGrid(grid)
@@ -107,92 +81,32 @@
     rememberDensity(density)
     say(`Notes: ${density}.`)
   }
-  // How much the music changes (every sound): the first stop's is the sound menu's, each later stop
-  // may set its own. It paces the harmony's moves and, for the pulse, its notes and phrases.
-  const variationChoice = ref<Variation>(currentVariation())
   function chooseVariation(variation: Variation) {
     variationChoice.value = variation
     rememberVariation(variation)
     say(`Variation: ${variation}.`)
   }
-  // Clusters on bars (pad, choir, orchestra; the pulse: its pattern): the whole cluster changes every n bars at the
-  // journey's tempo, or 0 for free time. The first stop's is the sound menu's; each later stop may set its own.
-  const barsChoice = ref<Bars>(currentBars())
   function chooseBars(bars: Bars) {
     barsChoice.value = bars
     rememberBars(bars)
     say(isPulse.value ? (bars ? `Pattern: a new one ${BARS_NAME[bars]}.` : 'Pattern: free time.') : bars ? `Chords: a new cluster ${BARS_NAME[bars]}.` : 'Chords: free time.')
   }
-  const driftGrid = ref<Grid | undefined>(undefined) // what this drift was started with
-  const driftDensity = ref<Density | undefined>(undefined)
-  const driftVoice = ref('') // the sound this drift was played on
-  const barsOn = computed(() => !!layout.value?.bars.some((b) => b > 0)) // chords (or patterns) on bars: there are bar lines to cut on
-
-  // The key: a root the listener chose (kept between visits), or auto — a new one each drift.
-  const rootChoice = ref<number | null>(currentRoot())
   function chooseRoot(root: number | null) {
     rootChoice.value = root
     rememberRoot(root)
     say(root === null ? 'Key: a new one each time.' : `Key: ${NOTE_NAMES[root]}.`)
   }
 
-  // What this journey is, kept on screen for a composer to note: key, modes, tempo, seed.
-  // `stages` are the modes in journey order (consecutive repeats merged); `from`/`to` are the
-  // waypoints each covers, so the one that is sounding can be marked as the drift moves.
-  const info = ref<Readout | null>(null)
-  const layout = shallowRef<Layout | null>(null) // reactive, so what is sounding follows it
-  let lastDrift: DriftRecord | null = null // what was begun, so it can be taken away exactly as it sounded
-  const exporting = ref('') // what is being made right now (shown on the export word)
-
-  // ── state ───────────────────────────────────────────────────────────────────────────
-  // `points` is the journey, in order (the interface offers one or two; nothing below
-  // assumes two). `position` is the fractional index along it, driven by the audio clock.
-  const points = ref<Point[]>([])
-  const preview = ref<Point | null>(null)
-  // The most stops a journey can have. More is possible for the engine; this keeps the screen readable.
-  const MAX_POINTS = 6
-  const minutes = ref(10) // length of the whole drift; Infinity never ends
-  const drifting = ref(false)
-  const position = ref(0)
-  const elapsed = ref(0)
-  const totalSeconds = ref(Infinity)
-
-  const plan = ref<Plan>({ waypoints: [], walk: 0 })
-  const seed = ref(0)
-  const audioActive = ref(false)
-  const session = ref(0)
-  let audioTeardown: number | undefined
-  const playerRef = ref<{ stopDrift: () => void } | null>(null)
-  const fieldRef = ref<{ focus: () => void } | null>(null)
-
-  const announcement = ref('')
-  const say = (text: string) => (announcement.value = text)
-
-  const wordFor = describe
-
   // ── choosing ────────────────────────────────────────────────────────────────────────
-  // a seed from an opened project, used by the next Begin only (any edit to the journey drops it)
-  let seedOverride: number | null = null
-  // "keep seed" (file menu): the last drift's seed and key are used by every Begin, so the same journey
-  // can be heard (and exported) on another sound or tempo, with the same chords on bars. For this visit
-  // only; an opened project brings its own seed and clears it.
-  const kept = ref<{ seed: number; key: number } | null>(null)
   function keepSeed() {
     if (kept.value) {
       kept.value = null
       say('Seed released: each Begin draws a new one.')
-    } else if (lastDrift) {
-      kept.value = { seed: lastDrift.seed, key: lastDrift.plan.tonic ?? 0 }
-      say(`Seed ${lastDrift.seed} kept, in ${NOTE_NAMES[kept.value.key]}. Begin again, on any sound, to hear it again.`)
+    } else if (lastDrift.value) {
+      kept.value = { seed: lastDrift.value.seed, key: lastDrift.value.plan.tonic ?? 0 }
+      say(`Seed ${lastDrift.value.seed} kept, in ${NOTE_NAMES[kept.value.key]}. Begin again, on any sound, to hear it again.`)
     }
   }
-  function reset() {
-    seedOverride = null
-    position.value = 0
-    elapsed.value = 0
-    info.value = null
-  }
-
   function choose(p: Point) {
     if (drifting.value) return
     const last = points.value[points.value.length - 1]
@@ -232,15 +146,6 @@
     fieldRef.value?.focus() // the button is about to go quiet; keep the keyboard somewhere useful
   }
 
-  // what a stop carries besides where it sits: its key, grid, density and variation, if it has its own
-  const settingsOf = (q: Point) => ({
-    ...(q.key === undefined ? {} : { key: q.key }),
-    ...(q.grid === undefined ? {} : { grid: q.grid }),
-    ...(q.density === undefined ? {} : { density: q.density }),
-    ...(q.variation === undefined ? {} : { variation: q.variation }),
-    ...(q.bars === undefined ? {} : { bars: q.bars }),
-  })
-
   // the word lists: set a stop, add the next, or take one away
   function setFromWords(index: number, p: Point | null) {
     if (drifting.value) return
@@ -261,7 +166,7 @@
   function begin() {
     if (!points.value.length || drifting.value) return
     clearTimeout(audioTeardown)
-    const forcedSeed = seedOverride
+    const forcedSeed = seedOverride.value
     reset()
     const d = buildDrift({
       points: points.value,
@@ -287,7 +192,7 @@
     driftDensity.value = d.density
     layout.value = d.layout
     info.value = d.readout
-    lastDrift = d.record
+    lastDrift.value = d.record
     session.value++
     audioActive.value = true
     drifting.value = true
@@ -301,8 +206,8 @@
   }
 
   function saveProject() {
-    if (!lastDrift) return
-    const d = lastDrift
+    if (!lastDrift.value) return
+    const d = lastDrift.value
     const project = toProject({
       points: d.points,
       words: d.words,
@@ -347,7 +252,7 @@
     variationChoice.value = p.variation
     barsChoice.value = p.bars
     warmUp()
-    seedOverride = p.seed
+    seedOverride.value = p.seed
     kept.value = null
     say(`Project opened: ${p.stops.length === 1 ? '1 stop' : `${p.stops.length} stops`}, ${NOTE_NAMES[p.root]}. Press begin.`)
   }
@@ -359,10 +264,10 @@
   // else a zip. The audio is rendered offline, faster than real time; it cannot run beside a live drift
   // (the offline context takes over Tone's clock), so it waits until the sound has stopped.
   async function exportAs(req: ExportRequest) {
-    if (!lastDrift || exporting.value) return
+    if (!lastDrift.value || exporting.value) return
     const wav = req.format === 'wav'
     if (wav && audioActive.value) return
-    const d = lastDrift
+    const d = lastDrift.value
     const units =
       req.scope === 'seeds'
         ? Array.from({ length: req.count }, (_, k) => ({ voiceId: d.voiceId, seed: (d.seed + k) % 2 ** 31 }))
@@ -430,42 +335,11 @@
     }
   }
 
-  // The mode and key sounding now: the start, moved by every step made so far.
-  const nowState = computed(() => (layout.value ? stateAt(layout.value, elapsed.value) : null))
-  // Which label to mark: among the stages in this mode and key, the one nearest the travelling
-  // point. While passing through a mode or key that is not a stop (a long walk), nothing is marked.
-  const activeStage = computed(() => {
-    const now = nowState.value
-    if (!info.value || !now || (!drifting.value && elapsed.value === 0)) return -1 // nothing is sounding
-    let best = -1
-    let gap = Infinity
-    info.value.stages.forEach((st, i) => {
-      if (st.rung !== now.rung || st.key !== now.tonic) return
-      const d = position.value < st.from ? st.from - position.value : position.value > st.to ? position.value - st.to : 0
-      if (d < gap) {
-        gap = d
-        best = i
-      }
-    })
-    return best
-  })
-  // between two stops a long walk passes through modes and keys that have no label: say which
-  const passing = computed(() => {
-    const now = nowState.value
-    if (!drifting.value || !info.value || !now || activeStage.value >= 0) return '\u00a0'
-    return `passing ${info.value.uniform ? '' : NOTE_NAMES[now.tonic] + ' '}${LADDER[now.rung]}`
-  })
   watch(activeStage, (i, before) => {
     if (drifting.value && i >= 0 && i !== before && info.value) say(`Now in ${info.value.stages[i].label}.`)
   })
 
   // ── a stop's key ────────────────────────────────────────────────────────────────────
-  // The first stop's key is the journey's (also set in the sound menu); a later stop's is its own,
-  // or none, which keeps the key of the stop before.
-  const stopKeys = computed<(number | null)[]>(() => [
-    rootChoice.value,
-    ...points.value.slice(1).map((p) => p.key ?? null),
-  ])
   function setStopKey(i: number, key: number | null) {
     if (drifting.value || i >= points.value.length) return
     if (i === 0) {
@@ -485,12 +359,6 @@
   // As with the key: the first stop's are the sound menu's; a later stop's are its own, or none,
   // which keeps the stop before's. The grid changes once, midway along the walk to the stop;
   // the density eases along it.
-  const isPulse = computed(() => VOICES[voiceId.value]?.style === 'pulse')
-  const stopGrids = computed<(Grid | null)[]>(() => [gridChoice.value, ...points.value.slice(1).map((p) => p.grid ?? null)])
-  const stopDensities = computed<(Density | null)[]>(() => [
-    densityChoice.value,
-    ...points.value.slice(1).map((p) => p.density ?? null),
-  ])
   function setStopFeel(i: number, field: 'grid' | 'density' | 'variation' | 'bars', value: Grid | Density | Variation | Bars | null) {
     if (drifting.value || i >= points.value.length) return
     if (i === 0) {
@@ -512,11 +380,9 @@
       value === null ? 'the same as before' : field === 'grid' ? GRID_NAME[value as Grid] : field === 'bars' ? (value ? BARS_NAME[value as Bars] : 'free time') : value
     say(`Stop ${i + 1}: ${what} ${shown}.`)
   }
-  const stopVariations = computed<(Variation | null)[]>(() => [variationChoice.value, ...points.value.slice(1).map((p) => p.variation ?? null)])
   const setStopGrid = (i: number, g: Grid | null) => setStopFeel(i, 'grid', g)
   const setStopDensity = (i: number, d: Density | null) => setStopFeel(i, 'density', d)
   const setStopVariation = (i: number, v: Variation | null) => setStopFeel(i, 'variation', v)
-  const stopBars = computed<(Bars | null)[]>(() => [barsChoice.value, ...points.value.slice(1).map((p) => p.bars ?? null)])
   const setStopBars = (i: number, b: Bars | null) => setStopFeel(i, 'bars', b)
 
   function finish(announce: string) {
@@ -538,12 +404,6 @@
   function onEnded() {
     finish('The drift has ended. You have arrived.')
   }
-
-  const progress = computed(() =>
-    drifting.value && Number.isFinite(totalSeconds.value)
-      ? Math.min(1, Math.max(0, elapsed.value / totalSeconds.value))
-      : null
-  )
 
   // ── what the screen looks like ──────────────────────────────────────────────────────
   const IDLE = ['#5c6d7a', '#8e9ab8', '#e8d7f1']
