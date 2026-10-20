@@ -14,32 +14,14 @@
   import { parseProject, toProject } from './project'
   import { buildDrift, ordinal } from './buildDrift'
   import { createJourney, MAX_POINTS, settingsOf } from './journey'
+  import { useSoundOps } from './soundOps'
+  import { loadPlayer, warmUp } from './warmUp'
   import { describe, paletteAt, palettePath, inkFor, type Point } from './moodPlane'
   import { BARS_NAME, DEFAULT_BARS, DEFAULT_VARIATION, type Bars, type Variation } from '../engine/compose'
-  import { GRID_LABEL, GRID_NAME, clampBpm, type Density, type Grid } from '../engine/pulse'
-  import {
-    VOICES,
-    preloadVoice,
-    rememberCustomBpm,
-    rememberDensity,
-    rememberGrid,
-    rememberRoot,
-    rememberTempoFeel,
-    rememberBars,
-    rememberVariation,
-    rememberVoice,
-    voiceFromLocation,
-    type TempoFeelName,
-  } from '../engine/voices'
+  import { GRID_LABEL, GRID_NAME, type Density, type Grid } from '../engine/pulse'
+  import { VOICES, preloadVoice } from '../engine/voices'
 
-  // Tone.js is large and only needed once a drift starts, so the player loads on demand —
-  // and, with the samples, is fetched ahead of time as soon as someone chooses a first stop.
-  const loadPlayer = () => import('../components/GenerativePlayer.vue')
   const GenerativePlayer = defineAsyncComponent(loadPlayer)
-  function warmUp() {
-    loadPlayer()
-    preloadVoice(voiceFromLocation())
-  }
 
   const j = createJourney()
   const {
@@ -48,54 +30,12 @@
     session, driftBpm, driftGrid, driftDensity, driftVoice, layout, info, exporting, kept, lastDrift, seedOverride, reset,
     barsOn, stopKeys, stopGrids, stopDensities, stopVariations, stopBars, activeStage, passing, progress,
   } = j
+  const sound = useSoundOps(j)
+  const { chooseVoice, chooseTempo, chooseBpm, chooseGrid, chooseDensity, chooseVariation, chooseBars, chooseRoot } = sound
   const wordFor = describe
   let audioTeardown: number | undefined
   const playerRef = ref<{ stopDrift: () => void } | null>(null)
   const fieldRef = ref<{ focus: () => void } | null>(null)
-
-  function chooseVoice(id: string) {
-    voiceId.value = id
-    rememberVoice(id)
-    preloadVoice(VOICES[id])
-    say(`Sound: ${VOICES[id].label}.`)
-  }
-
-  function chooseTempo(feel: TempoFeelName) {
-    tempoFeel.value = feel
-    customBpm.value = null
-    rememberTempoFeel(feel)
-    say(`Tempo: ${feel}, ${effectiveBpm.value} BPM.`)
-  }
-  function chooseBpm(bpm: number) {
-    customBpm.value = clampBpm(bpm)
-    rememberCustomBpm(customBpm.value)
-    say(`Tempo: ${customBpm.value} BPM.`)
-  }
-  function chooseGrid(grid: Grid) {
-    gridChoice.value = grid
-    rememberGrid(grid)
-    say(`Grid: ${GRID_NAME[grid]}.`)
-  }
-  function chooseDensity(density: Density) {
-    densityChoice.value = density
-    rememberDensity(density)
-    say(`Notes: ${density}.`)
-  }
-  function chooseVariation(variation: Variation) {
-    variationChoice.value = variation
-    rememberVariation(variation)
-    say(`Variation: ${variation}.`)
-  }
-  function chooseBars(bars: Bars) {
-    barsChoice.value = bars
-    rememberBars(bars)
-    say(isPulse.value ? (bars ? `Pattern: a new one ${BARS_NAME[bars]}.` : 'Pattern: free time.') : bars ? `Chords: a new cluster ${BARS_NAME[bars]}.` : 'Chords: free time.')
-  }
-  function chooseRoot(root: number | null) {
-    rootChoice.value = root
-    rememberRoot(root)
-    say(root === null ? 'Key: a new one each time.' : `Key: ${NOTE_NAMES[root]}.`)
-  }
 
   // ── choosing ────────────────────────────────────────────────────────────────────────
   function keepSeed() {
