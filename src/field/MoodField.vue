@@ -2,7 +2,7 @@
   import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
   import KeyPicker from './KeyPicker.vue'
   import ChoicePicker from './ChoicePicker.vue'
-  import { VARIATIONS, type Variation } from '../engine/compose'
+  import { BARS, BARS_OPTION, VARIATIONS, type Bars, type Variation } from '../engine/compose'
   import { NOTE_NAMES } from '../engine/score'
   import { DENSITIES, GRIDS, GRID_LABEL, type Density, type Grid } from '../engine/pulse'
   import {
@@ -28,6 +28,7 @@
     grids: (Grid | null)[] // per stop: the pulse's grid, or null (later stops: the same as before)
     densities: (Density | null)[]
     variations: (Variation | null)[] // per stop: how much the music changes, or null (later stops: the same as before)
+    bars: (Bars | null)[] // per stop: a new cluster every n bars (pad, choir, orchestra), or null (later stops: the same as before)
     pulse: boolean // the sound is the pulse, so a stop can set its grid and density
   }>()
 
@@ -38,6 +39,7 @@
     (e: 'grid', index: number, grid: Grid | null): void
     (e: 'density', index: number, density: Density | null): void
     (e: 'variation', index: number, variation: Variation | null): void
+    (e: 'bars', index: number, bars: Bars | null): void
     (e: 'clear'): void
     (e: 'preview', point: Point | null): void
   }>()
@@ -338,6 +340,15 @@
             :neutral="editing === 0 ? undefined : 'same'"
             :label="`Variation for stop ${editing + 1}`"
             @update:model-value="emit('variation', editing, $event as Variation | null)" />
+        </label>
+        <label v-if="!pulse" class="bubble-row">
+          <span>chords</span>
+          <ChoicePicker
+            :model-value="bars[editing] === null || bars[editing] === undefined ? null : String(bars[editing])"
+            :options="BARS.map((b) => ({ value: String(b), label: BARS_OPTION[b] }))"
+            :neutral="editing === 0 ? undefined : 'same'"
+            :label="`Chords for stop ${editing + 1}`"
+            @update:model-value="emit('bars', editing, $event === null ? null : (Number($event) as Bars))" />
         </label>
         <template v-if="pulse">
           <label class="bubble-row">

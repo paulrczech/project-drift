@@ -8,7 +8,7 @@
 //
 // The pad is the default; the sound selector (and `?voice=pad|choir|choir-mixed|orchestra|pulse`) picks another.
 
-import { DEFAULT_VARIATION, VARIATIONS, type Variation } from './compose'
+import { BARS, DEFAULT_BARS, DEFAULT_VARIATION, VARIATIONS, type Bars, type Variation } from './compose'
 import { DEFAULT_DENSITY, DEFAULT_GRID, DENSITIES, GRIDS, type Density, type Grid } from './pulse'
 
 export interface Layer {
@@ -39,6 +39,7 @@ export interface Voice {
   register: number // semitones to lift the engine's register
   span: number // semitones between the lowest and highest note any voice may reach
   ceiling?: number // an absolute highest note, for a voice that must not be pitched above its samples
+  spread?: number // how widely a cluster on bars is spaced: 0 tight (the pad) … 1 across the whole range (the sections)
   lowpass?: number // Hz: soften the top of the sound
   level: number // master gain, so voices sit at a similar loudness
   attack: number // seconds a note takes to fade in
@@ -85,6 +86,7 @@ const pad: Voice = {
   ],
   register: 0,
   span: 28,
+  spread: 0,
   level: 0.5,
   attack: 2,
   release: 3,
@@ -111,6 +113,7 @@ const choir: Voice = {
   register: 12,
   span: 20,
   ceiling: 79,
+  spread: 0.6,
   lowpass: 5000,
   level: 0.3, // measured against the pad: 4.4 dB hotter at equal gain
   attack: 2,
@@ -136,6 +139,7 @@ const choirMixed: Voice = {
   register: 8,
   span: 26,
   ceiling: 79,
+  spread: 1,
   lowpass: 4500,
   level: 0.26, // measured against the pad: 5.8 dB hotter at equal gain
   attack: 2,
@@ -179,6 +183,7 @@ const orchestra: Voice = {
   register: 0,
   span: 28,
   ceiling: 81,
+  spread: 1,
   lowpass: 6000,
   level: 0.293, // gains carry headroom for the arousal boosts (x0.58); matched to the pad by measurement
   // Re-striking: each layer follows its own schedule (a chain) at a slightly different
@@ -359,6 +364,27 @@ export function currentVariation(): Variation {
 export function rememberVariation(variation: Variation) {
   try {
     window.localStorage.setItem(VARIATION_KEY, variation)
+  } catch {
+    /* applies to this visit only */
+  }
+}
+
+// Clusters on bars (pad, choir, orchestra): a new cluster every n bars, or 0 for free time.
+const BARS_KEY = 'drift.bars'
+
+export function currentBars(): Bars {
+  try {
+    const v = Number(window.localStorage.getItem(BARS_KEY))
+    if (BARS.includes(v as Bars)) return v as Bars
+  } catch {
+    /* default */
+  }
+  return DEFAULT_BARS
+}
+
+export function rememberBars(bars: Bars) {
+  try {
+    window.localStorage.setItem(BARS_KEY, String(bars))
   } catch {
     /* applies to this visit only */
   }

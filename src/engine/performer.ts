@@ -31,6 +31,8 @@ export function performerFor(
   return new Composer({
     ...plan,
     ...params,
+    bpm: tempo.bpm ?? plan.bpm,
+    spread: voice.spread,
     attack: voice.attack,
     link: voice.link,
     links: voice.links,

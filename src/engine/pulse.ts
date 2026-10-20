@@ -23,8 +23,8 @@
 // VARIATION (per stop; still / gentle / flowing) sets how much of this happens: how long the
 // harmony waits between moves, how many differing notes are substituted at once (still: only on
 // phrase lines), and how much a phrase varies (still: a breath in every other phrase; gentle: a
-// change in the fourth cycle; flowing: also in the second, and the arpeggio's shape can change
-// on a phrase line). Gentle is the original behaviour.
+// change in the fourth cycle; flowing: a tweak in most bars, and the arpeggio takes another shape
+// at every phrase line). Gentle is the original behaviour.
 //
 // THE SHAPE. Phrases of four cycles with a small variation in the fourth; a dynamic arc that
 // rises and falls over a finite journey; and, near the end, the cell thins (passing notes, then
@@ -39,6 +39,7 @@ import {
   layoutTimeline,
   paceFor,
   variationAt,
+  START,
   type Flip,
   type Layout,
   type NoteEvent,
@@ -101,7 +102,7 @@ const AUTO_SHARE = [0.625, 0.75, 0.75] // by weakLevel(arousal): auto never fill
 const BEATS = 4 // beats in the cell
 const PHRASE = 4 // cycles in a phrase
 const ROOT_NEAR = 53 // the tonic sits at B2-A#3; the cell spans about an octave and a half above it, within the samples (to C5)
-export const START = 0.3 // seconds before the first pulse
+export { START }
 const HOLD = 1.5 // a note rings this many steps (it overlaps the next; the echo does the rest)
 const MAX_TONES = 4 // chord tones in the cell
 // An ostinato holds its shape longer than a pad's chords do: the harmony beneath moves this much slower.
@@ -115,6 +116,17 @@ const TEMPLATES = [
   [0, 1, 2, 3],
   [0, 2, 3, 2],
 ]
+// More shapes, reached only by flowing's changes of shape (the first pick is from TEMPLATES, so
+// every other level's random stream is as it was): descending, rotated starts, a fall from the top.
+const MORE_TEMPLATES = [
+  [2, 1, 0, 1],
+  [0, 3, 2, 1],
+  [1, 0, 1, 2],
+  [1, 2, 3, 2],
+  [3, 1, 2, 1],
+  [0, 1, 3, 2],
+]
+const ALL_TEMPLATES = [...TEMPLATES, ...MORE_TEMPLATES]
 // Which weak steps sound on the eighth grid, by how many (kept as they were, so default journeys
 // are unchanged). Other grids spread them evenly through the bar.
 const WEAK_EIGHTHS: Record<number, number[]> = { 0: [], 1: [5], 2: [3, 7], 3: [1, 3, 5] }
@@ -332,7 +344,7 @@ export class PulseComposer {
     const scale = getScaleNotes(this.engine.tonic, LADDER[this.engine.rung], 36, 90)
     const g = this.grid
     const cell: Cell = Array(this.cellSteps).fill(null)
-    const strong = TEMPLATES[this.templateIdx].map((idx) => tones[idx % tones.length])
+    const strong = ALL_TEMPLATES[this.templateIdx].map((idx) => tones[idx % tones.length])
     strong.forEach((note, beat) => (cell[beat * g] = note))
     const n = this.weakCount()
     const fill = n === this.cellSteps - BEATS && n > 0 // every step sounds: none is left silent
@@ -356,9 +368,10 @@ export class PulseComposer {
     const level = this.levelAt(this.barAt)
     const phrase = Math.floor(this.cycle / PHRASE)
     const inPhrase = this.cycle % PHRASE
-    // flowing: on a phrase line the arpeggio may take another shape (its notes follow one by one)
-    if (level === 'flowing' && this.cycle > 0 && inPhrase === 0 && unit(this.seed, phrase + 104729) < 0.5)
-      this.templateIdx = (this.templateIdx + 1 + Math.floor(unit(this.seed, phrase + 1299709) * (TEMPLATES.length - 1))) % TEMPLATES.length
+    // flowing: on every phrase line the arpeggio takes another shape (its notes follow one by one)
+    if (level === 'flowing' && this.cycle > 0 && inPhrase === 0)
+      this.templateIdx =
+        (this.templateIdx + 1 + Math.floor(unit(this.seed, phrase + 1299709) * (ALL_TEMPLATES.length - 1))) % ALL_TEMPLATES.length
     const target = this.targetCell()
 
     if (this.cycle === 0) {
@@ -388,14 +401,21 @@ export class PulseComposer {
     }
 
     // the phrase's variation: gentle, in its last cycle; still, only a breath in every other phrase;
-    // flowing, in its second cycle too
+    // flowing, in most bars after the phrase line, with two bolder tweaks (an octave on one beat;
+    // the bar started a beat late)
     this.playing = [...this.shown]
     let v = 0
     if (level === 'still') v = inPhrase === PHRASE - 1 && phrase % 2 === 1 ? 2 : 0
+    else if (level === 'flowing') v = inPhrase > 0 ? Math.floor(unit(this.seed, phrase * PHRASE + inPhrase + 7919) * 6) : 0
     else if (inPhrase === PHRASE - 1) v = Math.floor(unit(this.seed, phrase) * 4)
-    else if (level === 'flowing' && inPhrase === 1) v = Math.floor(unit(this.seed, phrase + 7919) * 4)
     if (v > 0) {
       const g = this.grid
+      if (v === 4) {
+        const at = (1 + Math.floor(unit(this.seed, phrase * PHRASE + inPhrase + 31337) * (BEATS - 1))) * g
+        const n = this.playing[at]
+        if (n !== null) this.playing[at] = n + 12 <= 76 ? n + 12 : n - 12 >= 40 ? n - 12 : n
+      }
+      if (v === 5) this.playing = [...this.playing.slice(g), ...this.playing.slice(0, g)]
       const lift = 3 * g // the last beat
       if (v === 1 && this.playing[lift] !== null && (this.playing[lift] as number) + 12 <= 76) this.playing[lift] = (this.playing[lift] as number) + 12 // lift
       if (v === 2) this.playing[2 * g] = null // a breath

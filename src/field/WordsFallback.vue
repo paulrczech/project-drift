@@ -3,7 +3,7 @@
   import { EMOTIONS, type Point } from './moodPlane'
   import KeyPicker from './KeyPicker.vue'
   import ChoicePicker from './ChoicePicker.vue'
-  import { VARIATIONS, type Variation } from '../engine/compose'
+  import { BARS, BARS_OPTION, VARIATIONS, type Bars, type Variation } from '../engine/compose'
   import { DENSITIES, GRIDS, GRID_LABEL, type Density, type Grid } from '../engine/pulse'
 
   // The fallback: the 21 words as plain dropdowns, one per stop of the journey, plus one more
@@ -16,6 +16,7 @@
     grids: (Grid | null)[] // each stop's pulse grid (the first: the sound menu's; later: null = the same as before)
     densities: (Density | null)[]
     variations: (Variation | null)[] // each stop's variation (the first: the sound menu's; later: null = the same as before)
+    bars: (Bars | null)[] // each stop's chords on bars (the first: the sound menu's; later: null = the same as before)
     pulse: boolean // the sound is the pulse, so grid and density apply
     drifting: boolean
     max: number
@@ -27,6 +28,7 @@
     (e: 'grid', index: number, grid: Grid | null): void
     (e: 'density', index: number, density: Density | null): void
     (e: 'variation', index: number, variation: Variation | null): void
+    (e: 'bars', index: number, bars: Bars | null): void
   }>()
 
   const open = ref(false)
@@ -93,6 +95,15 @@
           :label="`Variation for ${i === 0 ? 'where you are' : 'stop ' + (i + 1)}`"
           :disabled="drifting"
           @update:model-value="emit('variation', i, $event as Variation | null)" />
+        <ChoicePicker
+          v-if="!pulse && points[i]"
+          class="stop-key"
+          :model-value="bars[i] === null || bars[i] === undefined ? null : String(bars[i])"
+          :options="BARS.map((b) => ({ value: String(b), label: BARS_OPTION[b] }))"
+          :neutral="i === 0 ? undefined : 'same'"
+          :label="`Chords for ${i === 0 ? 'where you are' : 'stop ' + (i + 1)}`"
+          :disabled="drifting"
+          @update:model-value="emit('bars', i, $event === null ? null : (Number($event) as Bars))" />
         <template v-if="pulse && points[i]">
           <ChoicePicker
             class="stop-key"

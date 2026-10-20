@@ -13,6 +13,8 @@
 import type { Density, Grid } from './pulse'
 import { DEFAULT_TONIC, DriftEngine, beatFor, type Move, type Rung } from './drift'
 
+export const START = 0.3 // seconds before the first pulse of the pulse, and the first bar line of a pad on bars
+
 export interface NoteEvent {
   time: number // seconds from the start
   note: number // MIDI
@@ -47,6 +49,7 @@ export interface Waypoint {
   grid?: Grid
   density?: Density
   variation?: Variation // how much the music changes here; left out, the stop before's (the first: gentle)
+  bars?: Bars // sustained voices: change the whole cluster every this many bars (0: free time); left out, the stop before's (the first: free)
 }
 
 // VARIATION: how much the music changes over time, for every voice. It sets the pace of the
@@ -57,6 +60,18 @@ export const VARIATIONS = ['still', 'gentle', 'flowing'] as const
 export type Variation = (typeof VARIATIONS)[number]
 export const DEFAULT_VARIATION: Variation = 'gentle'
 export const VARIATION_AMOUNT: Record<Variation, number> = { still: 0, gentle: 0.5, flowing: 1 }
+
+// CLUSTERS ON BARS (pad, choir, orchestra): instead of one voice moving now and then, the whole
+// cluster changes on a downbeat every `bars` bars (4/4, at the journey's tempo), each voice to the
+// nearest tone of the new cluster. Mode and key steps then land on those same downbeats. 0 is the
+// free time Drift has always had.
+export const BARS = [0, 1, 2, 4, 8] as const
+export type Bars = (typeof BARS)[number]
+export const DEFAULT_BARS: Bars = 0
+export const DEFAULT_BARS_BPM = 60 // the tempo bars are counted in when none is given
+export const BARS_LABEL: Record<Bars, string> = { 0: 'free', 1: '1', 2: '2', 4: '4', 8: '8' } // the menu's chips
+export const BARS_OPTION: Record<Bars, string> = { 0: 'free', 1: '1 bar', 2: '2 bars', 4: '4 bars', 8: '8 bars' } // a stop's list
+export const BARS_NAME: Record<Bars, string> = { 0: 'free time', 1: 'every bar', 2: 'every 2 bars', 4: 'every 4 bars', 8: 'every 8 bars' }
 // the factor on the time between harmonic moves: still waits 1.6 times as long, flowing 0.6
 export const paceFor = (amount: number) => (amount <= 0.5 ? 1.6 - 1.2 * amount : 1.2 - 0.6 * amount)
 
@@ -74,6 +89,8 @@ export interface TimelinePlan {
   overlap?: number // seconds an old strike goes on after the next one starts (default: attack)
   maxHold?: number // longest a single strike may be held (shorter than the samples)
   beat?: number // fixed seconds between harmonic moves; by default arousal sets it
+  bpm?: number // the journey's tempo: what bars are counted in (default 60)
+  spread?: number // clusters on bars: 0 tight … 1 wide voicing (default 0)
   rng?: () => number
 }
 
@@ -130,6 +147,8 @@ export interface Layout {
   tonics: number[] // per waypoint
   arousals: number[] // per waypoint
   variations: number[] // per waypoint: VARIATION_AMOUNT
+  bars: number[] // per waypoint: clusters on bars (0: free)
+  barSeconds: number // one bar, in seconds, when any stop is on bars (else 0)
   duration: number // Infinity if the last hold is Infinity
 }
 
@@ -147,7 +166,7 @@ export function fifthsBetween(from: number, to: number): number {
   return k > 6 ? k - 12 : k
 }
 
-export function layoutTimeline(waypoints: Waypoint[], walk: number | number[], startTonic = DEFAULT_TONIC): Layout {
+export function layoutTimeline(waypoints: Waypoint[], walk: number | number[], startTonic = DEFAULT_TONIC, bpm?: number): Layout {
   const walks: Walk[] = []
   const raw: Flip[] = []
   const tonics: number[] = []
@@ -156,6 +175,8 @@ export function layoutTimeline(waypoints: Waypoint[], walk: number | number[], s
   waypoints.forEach((w, i) =>
     variations.push(w.variation && w.variation in VARIATION_AMOUNT ? VARIATION_AMOUNT[w.variation] : i ? variations[i - 1] : VARIATION_AMOUNT[DEFAULT_VARIATION])
   )
+  const bars: number[] = []
+  waypoints.forEach((w, i) => bars.push(BARS.includes(w.bars as Bars) ? (w.bars as Bars) : i ? bars[i - 1] : DEFAULT_BARS))
   let at = 0
   waypoints.forEach((w, i) => {
     at += w.hold
@@ -191,6 +212,23 @@ export function layoutTimeline(waypoints: Waypoint[], walk: number | number[], s
       for (let k = 0; k < Math.abs(net[kind]); k++) flips.push({ time: raw[i].time, dir: net[kind] > 0 ? 1 : -1, kind })
     i = j
   }
+  // On bars, a step lands on the downbeat of the cluster grid nearest to it (never in the last
+  // seconds), several on one downbeat if they fall together; the order is kept.
+  const barSeconds = bpm && bars.some((b) => b > 0) ? 240 / bpm : 0
+  if (barSeconds) {
+    let last = 0
+    for (const f of flips) {
+      const n = bars[walks.filter((x) => (x.start + x.end) / 2 <= f.time).length]
+      if (n) {
+        const span = n * barSeconds
+        let time = START + Math.max(0, Math.round((f.time - START) / span)) * span
+        while (time > at - 6 && time - span >= START) time -= span
+        f.time = time
+      }
+      f.time = Math.max(f.time, last)
+      last = f.time
+    }
+  }
   for (const f of flips) {
     const w = walks.find((x) => f.time >= x.start && f.time <= x.end)
     if (w) w.flips.push(f.time)
@@ -203,6 +241,8 @@ export function layoutTimeline(waypoints: Waypoint[], walk: number | number[], s
     tonics,
     arousals: waypoints.map((w) => w.arousal ?? DEFAULT_AROUSAL),
     variations,
+    bars,
+    barSeconds,
     duration: at,
   }
 }
@@ -241,6 +281,19 @@ export function variationAt(layout: Layout, t: number): number {
     if (t < w.end) return v[i] + (v[i + 1] - v[i]) * ((t - w.start) / (w.end - w.start))
   }
   return v[v.length - 1]
+}
+
+// Clusters on bars at time t: a stop's setting from the middle of the walk to it.
+export function barsAt(layout: Layout, t: number): number {
+  if (!layout.barSeconds) return 0
+  return layout.bars[layout.walks.filter((w) => (w.start + w.end) / 2 <= t).length]
+}
+
+// The first downbeat of an `n`-bar grid at or after t (`after`: strictly after).
+export function downbeat(layout: Layout, t: number, n: number, after = false): number {
+  const span = n * layout.barSeconds
+  const k = (t - START) / span
+  return START + (after ? Math.floor(k + 1e-9) + 1 : Math.ceil(k - 1e-9)) * span
 }
 
 // Where we are along the waypoints at time t, as a fractional index: 0 = at the first,
@@ -298,6 +351,7 @@ export class Composer {
   private flips: Flip[]
   private nextFlip = 0
   private finished = false
+  private spread: number
 
   constructor(plan: TimelinePlan) {
     this.rng = plan.rng ?? Math.random
@@ -308,7 +362,8 @@ export class Composer {
     this.maxLast = plan.maxHold ?? MAX_LAST
     this.settle = this.overlap + 0.5
     this.lookahead = Math.max(...this.links) * 1.15 + this.settle + 1
-    this.layout = layoutTimeline(plan.waypoints, plan.walk, plan.tonic)
+    this.spread = plan.spread ?? 0
+    this.layout = layoutTimeline(plan.waypoints, plan.walk, plan.tonic, plan.bpm ?? DEFAULT_BARS_BPM)
     this.flips = this.layout.flips
     this.engine = new DriftEngine({
       rung: plan.waypoints[0].rung,
@@ -320,6 +375,12 @@ export class Composer {
       rng: this.rng,
     })
     this.linkSeed = Math.floor(this.rng() * 2 ** 31)
+    if (barsAt(this.layout, 0)) {
+      // on bars from the start: the opening cluster sounds together on the first downbeat
+      this.t = START
+      this.barStep(true)
+      return
+    }
     this.engine.cluster.forEach((note, i) => this.begin(note, i * OPENING_STAGGER))
     this.t = this.beatBase(0) * (0.6 + 0.4 * this.rng()) + this.engine.cluster.length * OPENING_STAGGER
   }
@@ -406,10 +467,39 @@ export class Composer {
     for (const n of cluster) if (!this.open.has(n)) this.begin(n, f.time)
   }
 
+  // Clusters on bars: this.t is a downbeat. Steps made earlier sound at their own time; those on
+  // the downbeat are made together with the new cluster, which every voice reaches from the
+  // cluster it was in (a tone both share is held across the bar line).
+  private barStep(opening = false) {
+    const t = this.t
+    const { flips, layout } = this
+    while (this.nextFlip < flips.length && flips[this.nextFlip].time < t - 1e-6) this.flip(flips[this.nextFlip++])
+    while (this.nextFlip < flips.length && flips[this.nextFlip].time <= t + 1e-6) {
+      const f = flips[this.nextFlip++]
+      if (f.kind === 'key') this.engine.modulate(f.dir)
+      else this.engine.shift(f.dir)
+      this.marks.push({ time: f.time, kind: 'shift', rung: this.engine.rung })
+    }
+    this.engine.setArousal(arousalAt(layout, t))
+    const n = barsAt(layout, t)
+    const close = Number.isFinite(layout.duration) && downbeat(layout, t, n, true) >= layout.duration - 4
+    this.engine.recluster({ spread: this.spread, opening, close })
+    const cluster = this.engine.cluster
+    for (const note of [...this.open.keys()]) if (!cluster.includes(note)) this.finishNote(note, t)
+    for (const note of cluster) if (!this.open.has(note)) this.begin(note, t)
+    this.t = downbeat(layout, t, n, true)
+  }
+
   private advance(target: number) {
     // no harmonic moves in the last 4 seconds of a finite plan, however it is chunked
     const limit = Math.min(target, this.layout.duration - 4)
     while (this.t < limit) {
+      const n = barsAt(this.layout, this.t)
+      if (n) {
+        this.t = downbeat(this.layout, this.t, n) // (a free stretch ends on the next downbeat)
+        if (this.t < limit) this.barStep()
+        continue
+      }
       while (this.nextFlip < this.flips.length && this.flips[this.nextFlip].time <= this.t)
         this.flip(this.flips[this.nextFlip++])
       this.engine.setArousal(arousalAt(this.layout, this.t))

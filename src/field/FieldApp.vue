@@ -20,7 +20,7 @@
     type Point,
   } from './moodPlane'
   import { rungFor } from '../engine/moods'
-  import { DEFAULT_VARIATION, layoutTimeline, stateAt, type Layout, type TimelinePlan, type Variation } from '../engine/compose'
+  import { BARS_NAME, DEFAULT_BARS, DEFAULT_VARIATION, layoutTimeline, stateAt, type Bars, type Layout, type TimelinePlan, type Variation } from '../engine/compose'
   import { GRID_LABEL, GRID_NAME, TEMPO_FEEL, clampBpm, defaultBpm, type Density, type Grid } from '../engine/pulse'
   import { LADDER } from '../engine/drift'
 
@@ -31,6 +31,7 @@
     currentGrid,
     currentRoot,
     currentTempoFeel,
+    currentBars,
     currentVariation,
     currentVoiceId,
     preloadVoice,
@@ -39,6 +40,7 @@
     rememberGrid,
     rememberRoot,
     rememberTempoFeel,
+    rememberBars,
     rememberVariation,
     rememberVoice,
     voiceFromLocation,
@@ -112,6 +114,14 @@
     variationChoice.value = variation
     rememberVariation(variation)
     say(`Variation: ${variation}.`)
+  }
+  // Clusters on bars (pad, choir, orchestra): the whole cluster changes every n bars at the
+  // journey's tempo, or 0 for free time. The first stop's is the sound menu's; each later stop may set its own.
+  const barsChoice = ref<Bars>(currentBars())
+  function chooseBars(bars: Bars) {
+    barsChoice.value = bars
+    rememberBars(bars)
+    say(bars ? `Chords: a new cluster ${BARS_NAME[bars]}.` : 'Chords: free time.')
   }
   const driftGrid = ref<Grid | undefined>(undefined) // what this drift was started with
   const driftDensity = ref<Density | undefined>(undefined)
@@ -240,6 +250,7 @@
     ...(q.grid === undefined ? {} : { grid: q.grid }),
     ...(q.density === undefined ? {} : { density: q.density }),
     ...(q.variation === undefined ? {} : { variation: q.variation }),
+    ...(q.bars === undefined ? {} : { bars: q.bars }),
   })
 
   // the word lists: set a stop, add the next, or take one away
@@ -273,6 +284,8 @@
       tonic: tonics[i],
       variation: i > 0 ? p.variation : variationChoice.value,
       ...(i > 0 ? { grid: p.grid, density: p.density } : {}),
+      // (the pulse has no clusters to change on bars)
+      ...(VOICES[voiceId.value]?.style === 'pulse' ? {} : { bars: i > 0 ? p.bars : barsChoice.value }),
     }))
     const n = moods.length
     if (n === 1) return { waypoints: [{ ...moods[0], hold: endless ? Infinity : total }], walk: 0 }
@@ -298,10 +311,10 @@
       tonics.push(i === 0 ? rootChoice.value ?? Math.floor(Math.random() * 12) : p.key ?? tonics[i - 1])
     )
     plan.value = { ...planFor(points.value, minutes.value, tonics), tonic: tonics[0] }
-    totalSeconds.value = layoutTimeline(plan.value.waypoints, plan.value.walk, plan.value.tonic).duration
     seed.value = forcedSeed ?? Math.floor(Math.random() * 2 ** 31)
     const pulse = VOICES[voiceId.value]?.style === 'pulse'
     driftBpm.value = effectiveBpm.value
+    totalSeconds.value = layoutTimeline(plan.value.waypoints, plan.value.walk, plan.value.tonic, driftBpm.value).duration
     driftGrid.value = pulse ? gridChoice.value : undefined
     driftDensity.value = pulse ? densityChoice.value : undefined
     const uniform = tonics.every((t) => t === tonics[0])
@@ -314,8 +327,10 @@
         stages.push({ mode, key: tonics[i], label: uniform ? mode : `${NOTE_NAMES[tonics[i]]} ${mode}`, rung: w.rung, from: i, to: i })
       }
     })
-    layout.value = layoutTimeline(plan.value.waypoints, plan.value.walk, plan.value.tonic)
-    info.value = { key: NOTE_NAMES[tonics[0]], uniform, stages, bpm: pulse ? driftBpm.value : undefined, seed: `seed ${seed.value}` }
+    layout.value = layoutTimeline(plan.value.waypoints, plan.value.walk, plan.value.tonic, driftBpm.value)
+    // the tempo is shown where it matters: the pulse plays to it, and bars are counted in it
+    const onBars = plan.value.waypoints.some((w) => w.bars)
+    info.value = { key: NOTE_NAMES[tonics[0]], uniform, stages, bpm: pulse || onBars ? driftBpm.value : undefined, seed: `seed ${seed.value}` }
     lastDrift = {
       voiceId: voiceId.value,
       plan: plan.value,
@@ -341,7 +356,7 @@
         ? `in ${words[0]}`
         : `from ${words[0]}${words.length > 2 ? ` through ${words.slice(1, -1).join(', ')}` : ''} to ${words[words.length - 1]}`
     say(
-      `Drifting ${route} ${lengthName(minutes.value)}, ${uniform ? `in ${NOTE_NAMES[tonics[0]]}` : `from ${NOTE_NAMES[tonics[0]]} to ${NOTE_NAMES[tonics[tonics.length - 1]]}`}${pulse ? `, ${driftBpm.value} beats per minute` : ''}.`
+      `Drifting ${route} ${lengthName(minutes.value)}, ${uniform ? `in ${NOTE_NAMES[tonics[0]]}` : `from ${NOTE_NAMES[tonics[0]]} to ${NOTE_NAMES[tonics[tonics.length - 1]]}`}${pulse || onBars ? `, ${driftBpm.value} beats per minute` : ''}${onBars && barsChoice.value ? `, a new cluster ${BARS_NAME[barsChoice.value]}` : ''}.`
     )
   }
 
@@ -363,6 +378,7 @@
       grid: d.grid,
       density: d.density,
       variation: d.plan.waypoints[0]?.variation ?? DEFAULT_VARIATION,
+      bars: d.plan.waypoints[0]?.bars ?? DEFAULT_BARS,
       seed: d.seed,
       modes: d.modes,
     })
@@ -394,6 +410,7 @@
     if (p.grid) gridChoice.value = p.grid
     if (p.density) densityChoice.value = p.density
     variationChoice.value = p.variation
+    barsChoice.value = p.bars
     warmUp()
     seedOverride = p.seed
     say(`Project opened: ${p.stops.length === 1 ? '1 stop' : `${p.stops.length} stops`}, ${NOTE_NAMES[p.root]}. Press begin.`)
@@ -536,12 +553,13 @@
     densityChoice.value,
     ...points.value.slice(1).map((p) => p.density ?? null),
   ])
-  function setStopFeel(i: number, field: 'grid' | 'density' | 'variation', value: Grid | Density | Variation | null) {
+  function setStopFeel(i: number, field: 'grid' | 'density' | 'variation' | 'bars', value: Grid | Density | Variation | Bars | null) {
     if (drifting.value || i >= points.value.length) return
     if (i === 0) {
       if (value === null) return
       if (field === 'grid') chooseGrid(value as Grid)
       else if (field === 'density') chooseDensity(value as Density)
+      else if (field === 'bars') chooseBars(value as Bars)
       else chooseVariation(value as Variation)
       return
     }
@@ -551,14 +569,17 @@
       const { [field]: _gone, ...rest } = p
       return value === null ? rest : { ...rest, [field]: value }
     })
-    const what = field === 'grid' ? 'Grid' : field === 'density' ? 'Notes' : 'Variation'
-    const shown = value === null ? 'the same as before' : field === 'grid' ? GRID_NAME[value as Grid] : value
+    const what = field === 'grid' ? 'Grid' : field === 'density' ? 'Notes' : field === 'bars' ? 'Chords' : 'Variation'
+    const shown =
+      value === null ? 'the same as before' : field === 'grid' ? GRID_NAME[value as Grid] : field === 'bars' ? (value ? BARS_NAME[value as Bars] : 'free time') : value
     say(`Stop ${i + 1}: ${what} ${shown}.`)
   }
   const stopVariations = computed<(Variation | null)[]>(() => [variationChoice.value, ...points.value.slice(1).map((p) => p.variation ?? null)])
   const setStopGrid = (i: number, g: Grid | null) => setStopFeel(i, 'grid', g)
   const setStopDensity = (i: number, d: Density | null) => setStopFeel(i, 'density', d)
   const setStopVariation = (i: number, v: Variation | null) => setStopFeel(i, 'variation', v)
+  const stopBars = computed<(Bars | null)[]>(() => [barsChoice.value, ...points.value.slice(1).map((p) => p.bars ?? null)])
+  const setStopBars = (i: number, b: Bars | null) => setStopFeel(i, 'bars', b)
 
   function finish(announce: string) {
     drifting.value = false
@@ -623,6 +644,7 @@
         :grids="stopGrids"
         :densities="stopDensities"
         :variations="stopVariations"
+        :bars="stopBars"
         :pulse="isPulse"
         :drifting="drifting"
         :max="MAX_POINTS"
@@ -630,7 +652,8 @@
         @key="setStopKey"
         @grid="setStopGrid"
         @density="setStopDensity"
-        @variation="setStopVariation" />
+        @variation="setStopVariation"
+        @bars="setStopBars" />
     </div>
 
     <MoodField
@@ -642,6 +665,7 @@
       :grids="stopGrids"
       :densities="stopDensities"
       :variations="stopVariations"
+      :bars="stopBars"
       :pulse="isPulse"
       @choose="choose"
       @remove="remove"
@@ -649,6 +673,7 @@
       @grid="setStopGrid"
       @density="setStopDensity"
       @variation="setStopVariation"
+      @bars="setStopBars"
       @clear="clear"
       @preview="preview = $event" />
 
@@ -690,6 +715,7 @@
         :grid="gridChoice"
         :density="densityChoice"
         :variation="variationChoice"
+        :bars="barsChoice"
         :root="rootChoice"
         :disabled="drifting"
         @update:model-value="chooseVoice"
@@ -698,6 +724,7 @@
         @update:grid="chooseGrid"
         @update:density="chooseDensity"
         @update:variation="chooseVariation"
+        @update:bars="chooseBars"
         @update:root="chooseRoot" />
       <ExportPicker
         class="side right low"

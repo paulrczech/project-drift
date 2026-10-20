@@ -3,7 +3,7 @@
 // long notes the harmony really holds, split by section for the orchestra. Pure: no Tone.
 
 import { LADDER } from './drift'
-import { Composer, arousalAt, stateAt, type TimelinePlan } from './compose'
+import { Composer, arousalAt, downbeat, stateAt, type TimelinePlan } from './compose'
 import { GRID_LABEL, PulseComposer, START, clampBpm } from './pulse'
 import { mulberry } from './rng'
 import { performerFor, type Tempo } from './performer'
@@ -133,6 +133,16 @@ export function scoreFor(
     if (time - last.time < 1e-6) last.text = text
     else markers.push({ time, text })
   }
+  // where clusters on bars begin, change their rhythm, or give way to free time
+  if (performer instanceof Composer && layout.barSeconds)
+    layout.bars.forEach((b, i) => {
+      if (i && b === layout.bars[i - 1]) return
+      if (!i && !b) return
+      // a stop's setting takes over at the middle of the walk to it; clusters then change on the next downbeat of its grid
+      const w = layout.walks[i - 1]
+      const mid = w ? (w.start + w.end) / 2 : START
+      markers.push({ time: Math.max(0, (b ? downbeat(layout, mid, b) : mid) - START), text: b ? `chords every ${b} bar${b > 1 ? 's' : ''}` : 'chords free' })
+    })
   // where a pulse changes its grid
   if (performer instanceof PulseComposer)
     for (const sw of performer.switches) markers.push({ time: Math.max(0, sw.time - START), text: `grid ${GRID_LABEL[sw.grid]}` })

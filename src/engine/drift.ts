@@ -10,6 +10,7 @@ import { SCALE_MAP, getScaleNotes } from './eddy/scales'
 import { STRATEGY_MAP } from './eddy/strategies'
 import { generateCandidates } from './eddy/voiceLeading'
 import { type Cluster, sortCluster } from './eddy/noteUtils'
+import { pickCluster } from './clusters'
 
 export const DEFAULT_TONIC = 2 // D (pitch class, 0 = C)
 
@@ -125,6 +126,7 @@ export class DriftEngine {
   arousal: number
   private rng: () => number
   private recent: string[] = []
+  private recentSets: string[] = [] // the pitch-class sets of the clusters chosen on bars
   // Pitch classes the last mode change introduced that no voice has sounded yet.
   // The stream goes for these first, so a transition is heard, not just implied.
   pending = new Set<number>()
@@ -302,6 +304,38 @@ export class DriftEngine {
       return move
     }
     return null
+  }
+
+  // Clusters on bars: the whole cluster changes at once. A new set of the mode's pitch classes is
+  // chosen (see clusters.ts) and every voice goes to the nearest tone of it; `opening` (nothing
+  // sounds yet) and `close` put the tonic in the bass. Returns the cluster it left.
+  recluster(opts: { spread: number; opening?: boolean; close?: boolean }): Cluster {
+    const before = this.cluster
+    const picked = pickCluster({
+      scale: [...pcsOf(this.rung, this.tonic)],
+      tonic: this.tonic,
+      colour: (this.tonic + COLOR_INTERVAL[this.rung]) % 12,
+      third: this.modeThird,
+      previous: opts.opening ? null : before,
+      voices: voicesFor(this.arousal, before.length),
+      low: this.low,
+      high: this.high,
+      center: this.center,
+      arousal: this.arousal,
+      spread: opts.spread,
+      tonicBass: !!(opts.opening || opts.close),
+      recent: this.recentSets,
+      ok: (c) => wellSpaced(c, this.calm),
+      rng: this.rng,
+    })
+    if (picked) {
+      this.cluster = picked.cluster
+      this.recentSets.push(picked.key)
+      if (this.recentSets.length > 4) this.recentSets.shift()
+      this.remember()
+      this.pending.clear()
+    }
+    return before
   }
 
   // Move to an adjacent rung. The one degree that changes is a semitone shift,

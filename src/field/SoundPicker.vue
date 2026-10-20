@@ -2,7 +2,7 @@
   import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
   import { LISTED_VOICES, VOICES, type TempoFeelName } from '../engine/voices'
   import KeyPicker from './KeyPicker.vue'
-  import { VARIATIONS, type Variation } from '../engine/compose'
+  import { BARS, BARS_LABEL, BARS_NAME, VARIATIONS, type Bars, type Variation } from '../engine/compose'
   import { BPM_MAX, BPM_MIN, DENSITIES, GRIDS, GRID_LABEL, GRID_NAME, clampBpm, type Density, type Grid } from '../engine/pulse'
 
   // "sound": a quiet word beside the ring that opens a short list of voices. Choosing one
@@ -16,6 +16,7 @@
     grid: Grid // the pulse's steps per beat
     density: Density // how many of the pulse's weak steps sound
     variation: Variation // how much the music changes (every sound)
+    bars: Bars // the sustained sounds' new cluster every n bars (0: free time)
     root: number | null // the key chosen (0 = C … 11 = B), or null for a new one each drift
     disabled: boolean
   }>()
@@ -27,6 +28,7 @@
     (e: 'update:grid', grid: Grid): void
     (e: 'update:density', density: Density): void
     (e: 'update:variation', variation: Variation): void
+    (e: 'update:bars', bars: Bars): void
     (e: 'update:root', root: number | null): void
   }>()
 
@@ -53,6 +55,7 @@
   const gridRefs = ref<HTMLElement[]>([])
   const densityRefs = ref<HTMLElement[]>([])
   const variationRefs = ref<HTMLElement[]>([])
+  const barsRefs = ref<HTMLElement[]>([])
   // the quarter grid has only the beats, so there is no density to choose
   const noDensity = () => props.grid === 1
 
@@ -241,6 +244,24 @@
           {{ x }}
         </button>
       </div>
+      <div v-if="!isPulse()" class="tempo row" role="radiogroup" aria-label="Chords: a new cluster every few bars, or free time">
+        <span class="tempo-label" aria-hidden="true">chords</span>
+        <button
+          v-for="(b, i) in BARS"
+          :key="b"
+          :ref="(el) => el && (barsRefs[i] = el as HTMLElement)"
+          class="chip"
+          :class="{ on: b === bars }"
+          role="radio"
+          :aria-checked="b === bars"
+          :aria-label="BARS_NAME[b]"
+          :tabindex="b === bars ? 0 : -1"
+          type="button"
+          @click="emit('update:bars', b)"
+          @keydown="onChipKey($event, i, BARS, (v) => emit('update:bars', v), barsRefs)">
+          {{ BARS_LABEL[b] }}
+        </button>
+      </div>
       <div class="tempo keyrow">
         <label class="tempo-label" for="drift-key">key</label>
         <KeyPicker id="drift-key" :model-value="root" neutral="auto" label="Key" @update:model-value="emit('update:root', $event)" @keydown="bpmKey" />
@@ -303,6 +324,10 @@
     color: var(--ink);
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
+    /* on a short phone the menu scrolls instead of running off the top of the screen */
+    max-height: calc(100dvh - 150px - env(safe-area-inset-bottom, 0px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   .list.wide {
