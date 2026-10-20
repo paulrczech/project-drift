@@ -115,13 +115,13 @@
     rememberVariation(variation)
     say(`Variation: ${variation}.`)
   }
-  // Clusters on bars (pad, choir, orchestra): the whole cluster changes every n bars at the
+  // Clusters on bars (pad, choir, orchestra; the pulse: its pattern): the whole cluster changes every n bars at the
   // journey's tempo, or 0 for free time. The first stop's is the sound menu's; each later stop may set its own.
   const barsChoice = ref<Bars>(currentBars())
   function chooseBars(bars: Bars) {
     barsChoice.value = bars
     rememberBars(bars)
-    say(bars ? `Chords: a new cluster ${BARS_NAME[bars]}.` : 'Chords: free time.')
+    say(isPulse.value ? (bars ? `Pattern: a new one ${BARS_NAME[bars]}.` : 'Pattern: free time.') : bars ? `Chords: a new cluster ${BARS_NAME[bars]}.` : 'Chords: free time.')
   }
   const driftGrid = ref<Grid | undefined>(undefined) // what this drift was started with
   const driftDensity = ref<Density | undefined>(undefined)
@@ -284,8 +284,7 @@
       tonic: tonics[i],
       variation: i > 0 ? p.variation : variationChoice.value,
       ...(i > 0 ? { grid: p.grid, density: p.density } : {}),
-      // (the pulse has no clusters to change on bars)
-      ...(VOICES[voiceId.value]?.style === 'pulse' ? {} : { bars: i > 0 ? p.bars : barsChoice.value }),
+      bars: i > 0 ? p.bars : barsChoice.value, // clusters (the pulse: patterns) change every n bars, or 0 for free time
     }))
     const n = moods.length
     if (n === 1) return { waypoints: [{ ...moods[0], hold: endless ? Infinity : total }], walk: 0 }
@@ -367,8 +366,8 @@
         ? `in ${words[0]}`
         : `from ${words[0]}${words.length > 2 ? ` through ${words.slice(1, -1).join(', ')}` : ''} to ${words[words.length - 1]}`
     say(
-      `Drifting ${route} ${lengthName(minutes.value)}, ${uniform ? `in ${NOTE_NAMES[tonics[0]]}` : `from ${NOTE_NAMES[tonics[0]]} to ${NOTE_NAMES[tonics[tonics.length - 1]]}`}${pulse || onBars ? `, ${driftBpm.value} beats per minute` : ''}${onBars && barsChoice.value ? `, a new cluster ${BARS_NAME[barsChoice.value]}` : ''}.` +
-        eased.map((e) => ` Chords at ${ordinal(e.stop + 1)} eased from ${BARS_NAME[e.asked]} to ${BARS_NAME[e.got]}, to fit.`).join('')
+      `Drifting ${route} ${lengthName(minutes.value)}, ${uniform ? `in ${NOTE_NAMES[tonics[0]]}` : `from ${NOTE_NAMES[tonics[0]]} to ${NOTE_NAMES[tonics[tonics.length - 1]]}`}${pulse || onBars ? `, ${driftBpm.value} beats per minute` : ''}${onBars && barsChoice.value ? `, a new ${pulse ? 'pattern' : 'cluster'} ${BARS_NAME[barsChoice.value]}` : ''}.` +
+        eased.map((e) => ` ${pulse ? 'Pattern' : 'Chords'} at ${ordinal(e.stop + 1)} eased from ${BARS_NAME[e.asked]} to ${BARS_NAME[e.got]}, to fit.`).join('')
     )
   }
 
@@ -612,7 +611,7 @@
       const { [field]: _gone, ...rest } = p
       return value === null ? rest : { ...rest, [field]: value }
     })
-    const what = field === 'grid' ? 'Grid' : field === 'density' ? 'Notes' : field === 'bars' ? 'Chords' : 'Variation'
+    const what = field === 'grid' ? 'Grid' : field === 'density' ? 'Notes' : field === 'bars' ? (isPulse.value ? 'Pattern' : 'Chords') : 'Variation'
     const shown =
       value === null ? 'the same as before' : field === 'grid' ? GRID_NAME[value as Grid] : field === 'bars' ? (value ? BARS_NAME[value as Bars] : 'free time') : value
     say(`Stop ${i + 1}: ${what} ${shown}.`)
@@ -730,7 +729,7 @@
         </template>
         <template v-if="info.bars"> · {{ info.bars }} bars</template>
         <template v-if="info.bpm"> · {{ info.bpm }} BPM</template>
-        <template v-if="info.eased"> · chords eased to fit</template>
+        <template v-if="info.eased"> · {{ isPulse ? 'pattern' : 'chords' }} eased to fit</template>
         <span class="seed">{{ info.seed }}</span>
         <span class="seed passing">{{ passing }}</span>
       </template>

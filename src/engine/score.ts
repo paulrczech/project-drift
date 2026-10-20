@@ -144,15 +144,16 @@ export function scoreFor(
     if (time - last.time < 1e-6) last.text = text
     else markers.push({ time, text })
   }
-  // where clusters on bars begin, change their rhythm, or give way to free time
-  if (performer instanceof Composer && layout.barSeconds)
+  // where clusters (or, for the pulse, patterns) on bars begin, change their rhythm, or give way to free time
+  const what = performer instanceof PulseComposer ? 'pattern' : 'chords'
+  if (layout.barSeconds)
     layout.bars.forEach((b, i) => {
       if (i && b === layout.bars[i - 1]) return
       if (!i && !b) return
       // a stop's setting takes over at the middle of the walk to it; clusters then change on the next downbeat of its grid
       const w = layout.walks[i - 1]
       const mid = w ? (w.start + w.end) / 2 : START
-      markers.push({ time: Math.max(0, (b ? downbeat(layout, mid, b) : mid) - START), text: b ? `chords every ${b} bar${b > 1 ? 's' : ''}` : 'chords free' })
+      markers.push({ time: Math.max(0, (b ? downbeat(layout, mid, b) : mid) - START), text: b ? `${what} every ${b} bar${b > 1 ? 's' : ''}` : `${what} free` })
     })
   // where a pulse changes its grid
   if (performer instanceof PulseComposer)
@@ -177,9 +178,19 @@ export function scoreFor(
       if (to - c.time > 0.5) cut(c.time, to)
     })
   } else if (performer instanceof PulseComposer) {
-    // four-bar phrases (the cell is one bar; the grid only changes on a phrase line)
+    // a pattern on bars lasts its bars; elsewhere, four-bar phrases (the cell is one bar; the grid only
+    // changes on a phrase line)
     const phrase = 4 * (240 / performer.bpm)
-    for (let from = START; from < layout.duration - 0.5; from += phrase) cut(from, Math.min(from + phrase, layout.duration))
+    const cs = performer.clusters
+    let ci = 0
+    for (let from = START; from < layout.duration - 0.5; ) {
+      while (ci < cs.length && cs[ci].time < from - 1e-4) ci++
+      const here = cs[ci] && Math.abs(cs[ci].time - from) < 1e-4
+      const next = cs[ci + (here ? 1 : 0)]?.time ?? Infinity
+      const to = Math.min(from + (here ? cs[ci].bars * layout.barSeconds : phrase), next, layout.duration)
+      cut(from, to)
+      from = to
+    }
   }
   const modes = waypoints.map((w, i) => name(w.rung, layout.tonics[i])).filter((m, i, a) => m !== a[i - 1])
   return { bpm, tracks, markers, duration: layout.duration, key: NOTE_NAMES[layout.tonic0], uniformKey, modes, cuts, heldCuts: performer instanceof Composer }

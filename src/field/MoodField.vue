@@ -341,13 +341,13 @@
             :label="`Variation for stop ${editing + 1}`"
             @update:model-value="emit('variation', editing, $event as Variation | null)" />
         </label>
-        <label v-if="!pulse" class="bubble-row">
-          <span>chords</span>
+        <label class="bubble-row">
+          <span>{{ pulse ? 'pattern' : 'chords' }}</span>
           <ChoicePicker
             :model-value="bars[editing] === null || bars[editing] === undefined ? null : String(bars[editing])"
             :options="BARS.map((b) => ({ value: String(b), label: BARS_OPTION[b] }))"
             :neutral="editing === 0 ? undefined : 'same'"
-            :label="`Chords for stop ${editing + 1}`"
+            :label="`${pulse ? 'Pattern' : 'Chords'} for stop ${editing + 1}`"
             @update:model-value="emit('bars', editing, $event === null ? null : (Number($event) as Bars))" />
         </label>
         <template v-if="pulse">

@@ -244,8 +244,8 @@
           {{ x }}
         </button>
       </div>
-      <div v-if="!isPulse()" class="tempo row" role="radiogroup" aria-label="Chords: a new cluster every few bars, or free time">
-        <span class="tempo-label" aria-hidden="true">chords</span>
+      <div class="tempo row" role="radiogroup" :aria-label="isPulse() ? 'Pattern: a new pattern every few bars, or free time' : 'Chords: a new cluster every few bars, or free time'">
+        <span class="tempo-label" aria-hidden="true">{{ isPulse() ? 'pattern' : 'chords' }}</span>
         <button
           v-for="(b, i) in BARS"
           :key="b"

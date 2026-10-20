@@ -96,12 +96,12 @@
           :disabled="drifting"
           @update:model-value="emit('variation', i, $event as Variation | null)" />
         <ChoicePicker
-          v-if="!pulse && points[i]"
+          v-if="points[i]"
           class="stop-key"
           :model-value="bars[i] === null || bars[i] === undefined ? null : String(bars[i])"
           :options="BARS.map((b) => ({ value: String(b), label: BARS_OPTION[b] }))"
           :neutral="i === 0 ? undefined : 'same'"
-          :label="`Chords for ${i === 0 ? 'where you are' : 'stop ' + (i + 1)}`"
+          :label="`${pulse ? 'Pattern' : 'Chords'} for ${i === 0 ? 'where you are' : 'stop ' + (i + 1)}`"
           :disabled="drifting"
           @update:model-value="emit('bars', i, $event === null ? null : (Number($event) as Bars))" />
         <template v-if="pulse && points[i]">
