@@ -12,6 +12,7 @@
   import { renderDriftWav } from '../engine/render'
   import { LENGTHS } from './lengths'
   import { parseProject, toProject } from './project'
+  import { buildDrift, ordinal, type DriftRecord, type Plan, type Readout } from './buildDrift'
   import {
     describe,
     paletteAt,
@@ -19,8 +20,7 @@
     inkFor,
     type Point,
   } from './moodPlane'
-  import { rungFor } from '../engine/moods'
-  import { BARS_NAME, DEFAULT_BARS, DEFAULT_VARIATION, layoutTimeline, stateAt, type Bars, type Layout, type TimelinePlan, type Variation } from '../engine/compose'
+  import { BARS_NAME, DEFAULT_BARS, DEFAULT_VARIATION, stateAt, type Bars, type Layout, type Variation } from '../engine/compose'
   import { GRID_LABEL, GRID_NAME, TEMPO_FEEL, clampBpm, defaultBpm, type Density, type Grid } from '../engine/pulse'
   import { LADDER } from '../engine/drift'
 
@@ -139,32 +139,9 @@
   // What this journey is, kept on screen for a composer to note: key, modes, tempo, seed.
   // `stages` are the modes in journey order (consecutive repeats merged); `from`/`to` are the
   // waypoints each covers, so the one that is sounding can be marked as the drift moves.
-  interface Stage {
-    mode: string
-    key: number // pitch class
-    label: string // "dorian", or "Ab major" when the journey changes key
-    rung: number
-    from: number
-    to: number
-  }
-  const info = ref<{ key: string; uniform: boolean; stages: Stage[]; bpm?: number; bars?: number; eased?: boolean; seed: string } | null>(null)
+  const info = ref<Readout | null>(null)
   const layout = shallowRef<Layout | null>(null) // reactive, so what is sounding follows it
-  // what was begun, so it can be taken away exactly as it sounded (same plan, seed, voice, tempo)
-  let lastDrift: {
-    voiceId: string
-    plan: TimelinePlan
-    seed: number
-    bpm?: number
-    grid?: Grid
-    density?: Density
-    stops: string
-    minutes: number
-    key: string // the key it starts in
-    head: string // the key as it begins a file name ('' when the journey changes key)
-    modes: string[] // one label per stage
-    points: Point[]
-    words: string[]
-  } | null = null
+  let lastDrift: DriftRecord | null = null // what was begun, so it can be taken away exactly as it sounded
   const exporting = ref('') // what is being made right now (shown on the export word)
 
   // ── state ───────────────────────────────────────────────────────────────────────────
@@ -180,7 +157,7 @@
   const elapsed = ref(0)
   const totalSeconds = ref(Infinity)
 
-  const plan = ref<Omit<TimelinePlan, 'rng'>>({ waypoints: [], walk: 0 })
+  const plan = ref<Plan>({ waypoints: [], walk: 0 })
   const seed = ref(0)
   const audioActive = ref(false)
   const session = ref(0)
@@ -192,8 +169,6 @@
   const say = (text: string) => (announcement.value = text)
 
   const wordFor = describe
-  const lengthName = (m: number) =>
-    m === Infinity ? 'with no end' : m === 1 ? 'for 1 minute' : `for ${m} minutes`
 
   // ── choosing ────────────────────────────────────────────────────────────────────────
   // a seed from an opened project, used by the next Begin only (any edit to the journey drops it)
@@ -217,8 +192,6 @@
     elapsed.value = 0
     info.value = null
   }
-
-  const ordinal = (n: number) => `stop ${n}`
 
   function choose(p: Point) {
     if (drifting.value) return
@@ -285,106 +258,41 @@
   }
 
   // ── a drift ─────────────────────────────────────────────────────────────────────────
-  // Length is for the whole drift: 15% settled where you are, 30% arriving where you are going
-  // (ending in the fade), and the middle 55% travelling — split between the legs, with a brief
-  // settle (a third of a leg) at each stop in between so every mood is heard. ∞ travels over
-  // ten minutes, then stays.
-  function planFor(pts: Point[], m: number, tonics: number[]) {
-    const endless = m === Infinity
-    const total = (endless ? 10 : m) * 60
-    // a later stop may set the pulse's grid and density, and every sound's variation; the first stop's are the sound menu's
-    const moods = pts.map((p, i) => ({
-      rung: rungFor(p.v),
-      arousal: p.a,
-      tonic: tonics[i],
-      variation: i > 0 ? p.variation : variationChoice.value,
-      ...(i > 0 ? { grid: p.grid, density: p.density } : {}),
-      bars: i > 0 ? p.bars : barsChoice.value, // clusters (the pulse: patterns) change every n bars, or 0 for free time
-    }))
-    const n = moods.length
-    if (n === 1) return { waypoints: [{ ...moods[0], hold: endless ? Infinity : total }], walk: 0 }
-    const leg = (total * 0.55) / (n - 1 + 0.3 * (n - 2))
-    return {
-      waypoints: moods.map((mood, i) => ({
-        ...mood,
-        hold: i === 0 ? total * 0.15 : i === n - 1 ? (endless ? Infinity : total * 0.3) : leg * 0.3,
-      })),
-      walk: leg,
-    }
-  }
-
   function begin() {
     if (!points.value.length || drifting.value) return
     clearTimeout(audioTeardown)
     const forcedSeed = seedOverride
     reset()
-    // each stop's key: the first is the journey's (chosen, or a fresh one each drift); a later stop
-    // with none chosen keeps the key of the stop before it
-    const tonics: number[] = []
-    points.value.forEach((p, i) =>
-      tonics.push(i === 0 ? rootChoice.value ?? kept.value?.key ?? Math.floor(Math.random() * 12) : p.key ?? tonics[i - 1])
-    )
-    plan.value = { ...planFor(points.value, minutes.value, tonics), tonic: tonics[0] }
-    seed.value = forcedSeed ?? kept.value?.seed ?? Math.floor(Math.random() * 2 ** 31)
-    const pulse = VOICES[voiceId.value]?.style === 'pulse'
-    driftBpm.value = effectiveBpm.value
-    totalSeconds.value = layoutTimeline(plan.value.waypoints, plan.value.walk, plan.value.tonic, driftBpm.value).duration
-    driftVoice.value = voiceId.value
-    driftGrid.value = pulse ? gridChoice.value : undefined
-    driftDensity.value = pulse ? densityChoice.value : undefined
-    const uniform = tonics.every((t) => t === tonics[0])
-    const stages: Stage[] = []
-    plan.value.waypoints.forEach((w, i) => {
-      const last = stages[stages.length - 1]
-      if (last && last.rung === w.rung && last.key === tonics[i]) last.to = i
-      else {
-        const mode = LADDER[w.rung]
-        stages.push({ mode, key: tonics[i], label: uniform ? mode : `${NOTE_NAMES[tonics[i]]} ${mode}`, rung: w.rung, from: i, to: i })
-      }
-    })
-    layout.value = layoutTimeline(plan.value.waypoints, plan.value.walk, plan.value.tonic, driftBpm.value)
-    // the tempo is shown where it matters: the pulse plays to it, and bars are counted in it
-    const onBars = plan.value.waypoints.some((w) => w.bars)
-    // a stop's chord setting that does not fit its stretch of the journey is eased to the longest that does
-    const L = layout.value
-    const eased = L.bars.flatMap((b, i) => (b !== L.barsAsked[i] ? [{ stop: i, asked: L.barsAsked[i] as Bars, got: b as Bars }] : []))
-    info.value = {
-      key: NOTE_NAMES[tonics[0]],
-      uniform,
-      stages,
-      bpm: pulse || onBars ? driftBpm.value : undefined,
-      bars: L.barSeconds && Number.isFinite(L.duration) ? Math.round(L.duration / L.barSeconds) : undefined,
-      eased: eased.length > 0,
-      seed: `seed ${seed.value}`,
-    }
-    lastDrift = {
-      voiceId: voiceId.value,
-      plan: plan.value,
-      seed: seed.value,
-      bpm: driftBpm.value,
-      grid: driftGrid.value,
-      density: driftDensity.value,
-      stops: points.value.map(wordFor).join(' > '),
+    const d = buildDrift({
+      points: points.value,
       minutes: minutes.value,
-      key: info.value.key,
-      head: uniform ? info.value.key : '',
-      modes: stages.map((st) => st.label),
-      points: points.value.map((p) => ({ ...p })),
-      words: points.value.map(wordFor),
-    }
+      voiceId: voiceId.value,
+      pulse: VOICES[voiceId.value]?.style === 'pulse',
+      bpm: effectiveBpm.value,
+      grid: gridChoice.value,
+      density: densityChoice.value,
+      variation: variationChoice.value,
+      bars: barsChoice.value,
+      rootChoice: rootChoice.value,
+      kept: kept.value,
+      seedOverride: forcedSeed,
+      random: Math.random,
+    })
+    plan.value = d.plan
+    seed.value = d.seed
+    driftBpm.value = d.bpm
+    totalSeconds.value = d.layout.duration
+    driftVoice.value = d.voiceId
+    driftGrid.value = d.grid
+    driftDensity.value = d.density
+    layout.value = d.layout
+    info.value = d.readout
+    lastDrift = d.record
     session.value++
     audioActive.value = true
     drifting.value = true
     preview.value = null
-    const words = points.value.map(wordFor)
-    const route =
-      words.length === 1
-        ? `in ${words[0]}`
-        : `from ${words[0]}${words.length > 2 ? ` through ${words.slice(1, -1).join(', ')}` : ''} to ${words[words.length - 1]}`
-    say(
-      `Drifting ${route} ${lengthName(minutes.value)}, ${uniform ? `in ${NOTE_NAMES[tonics[0]]}` : `from ${NOTE_NAMES[tonics[0]]} to ${NOTE_NAMES[tonics[tonics.length - 1]]}`}${pulse || onBars ? `, ${driftBpm.value} beats per minute` : ''}${onBars && barsChoice.value ? `, a new ${pulse ? 'pattern' : 'cluster'} ${BARS_NAME[barsChoice.value]}` : ''}.` +
-        eased.map((e) => ` ${pulse ? 'Pattern' : 'Chords'} at ${ordinal(e.stop + 1)} eased from ${BARS_NAME[e.asked]} to ${BARS_NAME[e.got]}, to fit.`).join('')
-    )
+    say(d.announcement)
   }
 
   function onProgress(newPosition: number, _text: number, seconds: number) {
