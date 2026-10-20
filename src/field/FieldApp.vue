@@ -7,7 +7,7 @@
   import SoundPicker from './SoundPicker.vue'
   import ExportPicker from './ExportPicker.vue'
   import { NOTE_NAMES, scoreFor } from '../engine/score'
-  import { clipFiles, download, exportName, midiBytes } from './exportMidi'
+  import { clipFiles, download, exportName, midiBytes, type ExportRequest } from './exportMidi'
   import { zipStored, type ZipFile } from './zip'
   import { renderDriftWav } from '../engine/render'
   import { LENGTHS } from './lengths'
@@ -125,6 +125,8 @@
   }
   const driftGrid = ref<Grid | undefined>(undefined) // what this drift was started with
   const driftDensity = ref<Density | undefined>(undefined)
+  const driftVoice = ref('') // the sound this drift was played on
+  const barsOn = computed(() => !!layout.value?.bars.some((b) => b > 0)) // chords (or patterns) on bars: there are bar lines to cut on
 
   // The key: a root the listener chose (kept between visits), or auto — a new one each drift.
   const rootChoice = ref<number | null>(currentRoot())
@@ -327,6 +329,7 @@
     const pulse = VOICES[voiceId.value]?.style === 'pulse'
     driftBpm.value = effectiveBpm.value
     totalSeconds.value = layoutTimeline(plan.value.waypoints, plan.value.walk, plan.value.tonic, driftBpm.value).duration
+    driftVoice.value = voiceId.value
     driftGrid.value = pulse ? gridChoice.value : undefined
     driftDensity.value = pulse ? densityChoice.value : undefined
     const uniform = tonics.every((t) => t === tonics[0])
@@ -441,108 +444,79 @@
     say(`Project opened: ${p.stops.length === 1 ? '1 stop' : `${p.stops.length} stops`}, ${NOTE_NAMES[p.root]}. Press begin.`)
   }
 
-  async function exportMidi() {
+  // Taking the journey away (file menu): what to make (MIDI; clips for a DAW's clip view; the audio as
+  // WAV) and how much of it — this drift, several seeds of it (the same stops, key, tempo and sound, the
+  // seeds running on from this drift's own, so the first is what was just heard), or this drift on several
+  // sounds (this seed and tempo; on bars they play the same chords). One file when it is one MIDI or WAV,
+  // else a zip. The audio is rendered offline, faster than real time; it cannot run beside a live drift
+  // (the offline context takes over Tone's clock), so it waits until the sound has stopped.
+  async function exportAs(req: ExportRequest) {
     if (!lastDrift || exporting.value) return
-    exporting.value = 'saving…'
+    const wav = req.format === 'wav'
+    if (wav && audioActive.value) return
+    const d = lastDrift
+    const units =
+      req.scope === 'seeds'
+        ? Array.from({ length: req.count }, (_, k) => ({ voiceId: d.voiceId, seed: (d.seed + k) % 2 ** 31 }))
+        : req.scope === 'sounds'
+          ? req.sounds.filter((id) => VOICES[id]).map((id) => ({ voiceId: id, seed: d.seed }))
+          : [{ voiceId: d.voiceId, seed: d.seed }]
+    if (!units.length) return
+    const many = units.length > 1
+    const ext = req.format === 'clips' ? 'zip' : req.format === 'mid' ? 'mid' : 'wav'
+    exporting.value = wav ? 'loading…' : 'saving…'
+    say(wav ? 'Rendering the audio. This can take a little while.' : many ? `Making ${units.length} files.` : 'Making the file.')
     try {
-      const d = lastDrift
-      const score = scoreFor(VOICES[d.voiceId], d.plan, d.seed, { bpm: d.bpm, grid: d.grid, density: d.density })
-      const bytes = await midiBytes(score, { voice: VOICES[d.voiceId].label, seed: d.seed, stops: d.stops, minutes: d.minutes, feel: d.grid && d.density ? `${GRID_LABEL[d.grid]} ${d.density}` : undefined })
-      download(bytes, exportName(d.head, d.modes, d.bpm, 'mid'), 'audio/midi')
-      say(`MIDI file saved: ${d.head ? d.head + ' ' : ''}${d.modes.join(' to ')}.`)
-    } catch {
-      say('Sorry, the MIDI file could not be made.')
-    } finally {
-      exporting.value = ''
-    }
-  }
-
-  // Clips for a DAW's clip view (Ableton Session View, Logic Live Loops), in one zip: a cluster on
-  // bars for the sustained voices, a four-bar phrase for the pulse. Free time has nowhere to cut.
-  const canClips = computed(() => {
-    const L = layout.value
-    return !!info.value && (driftGrid.value !== undefined || !!L?.bars.some((b) => b > 0))
-  })
-  async function exportClips() {
-    if (!lastDrift || exporting.value) return
-    if (!canClips.value) {
-      say('Clips need chords on bars (1, 2, 4 or 8) or the pulse: free time has no bar lines to cut on.')
-      return
-    }
-    exporting.value = 'saving…'
-    try {
-      const d = lastDrift
-      const voice = VOICES[d.voiceId]
-      const score = scoreFor(voice, d.plan, d.seed, { bpm: d.bpm, grid: d.grid, density: d.density })
-      const files = await clipFiles(score, { voice: voice.label, seed: d.seed, stops: d.stops, minutes: d.minutes, feel: d.grid && d.density ? `${GRID_LABEL[d.grid]} ${d.density}` : undefined }, d.words)
+      const files: ZipFile[] = []
+      let without = 0 // sounds that had nothing to cut into clips
+      for (const [k, u] of units.entries()) {
+        const voice = VOICES[u.voiceId]
+        const pulse = voice.style === 'pulse'
+        // the pulse's grid and density are the drift's, or (when it was another sound) the sound menu's
+        const tempo = { bpm: d.bpm, grid: d.grid ?? gridChoice.value, density: d.density ?? densityChoice.value }
+        const info = {
+          voice: voice.label,
+          seed: u.seed,
+          stops: d.stops,
+          minutes: d.minutes,
+          feel: pulse ? `${GRID_LABEL[tempo.grid]} ${tempo.density}` : undefined,
+        }
+        const of = `${k + 1}/${units.length}`
+        const tag = req.scope === 'seeds' ? `${u.voiceId}-seed${u.seed}` : req.scope === 'sounds' ? u.voiceId : undefined
+        if (wav) {
+          const bytes = await renderDriftWav(voice, d.plan, u.seed, tempo, (p) => {
+            exporting.value = p.stage === 'loading' ? 'loading…' : many ? `rendering ${of} ${Math.round(p.done * 100)}%` : `rendering ${Math.round(p.done * 100)}%`
+          })
+          files.push({ name: exportName(d.head, d.modes, d.bpm, 'wav', tag), data: bytes })
+          continue
+        }
+        if (many) exporting.value = `saving ${of}`
+        await new Promise((r) => setTimeout(r)) // let the label show
+        const score = scoreFor(voice, d.plan, u.seed, tempo)
+        if (req.format === 'mid') {
+          files.push({ name: exportName(d.head, d.modes, d.bpm, 'mid', tag), data: await midiBytes(score, info) })
+        } else {
+          const clips = await clipFiles(score, info, d.words)
+          if (!clips.length) without++
+          files.push(...clips.map((f) => (many ? { ...f, name: `${tag}/${f.name}` } : f)))
+        }
+      }
       if (!files.length) {
-        say('There was nothing to cut into clips.')
+        say('There was nothing to cut into clips: free time has no bar lines. Put chords on bars, or use the pulse.')
         return
       }
-      download(zipStored(files), exportName(d.head, d.modes, d.bpm, 'zip', `${d.voiceId}-clips`), 'application/zip')
-      say(`${files.length - 1} clips saved: ${d.head ? d.head + ' ' : ''}${d.modes.join(' to ')}.`)
-    } catch {
-      say('Sorry, the clips could not be made.')
-    } finally {
-      exporting.value = ''
-    }
-  }
-
-  // The audio is rendered offline, faster than real time; it cannot run beside a live drift
-  // (the offline context takes over Tone's clock), so it waits until the sound has stopped.
-  async function exportWav() {
-    if (!lastDrift || exporting.value || audioActive.value) return
-    exporting.value = 'rendering…'
-    say('Rendering the audio. This can take a little while.')
-    try {
-      const d = lastDrift
-      const voice = VOICES[d.voiceId]
-      const bytes = await renderDriftWav(voice, d.plan, d.seed, { bpm: d.bpm, grid: d.grid, density: d.density }, (p) => {
-        exporting.value = p.stage === 'loading' ? 'loading…' : `rendering ${Math.round(p.done * 100)}%`
-      })
-      download(bytes, exportName(d.head, d.modes, d.bpm, 'wav'), 'audio/wav')
-      say(`Audio file saved: ${d.head ? d.head + ' ' : ''}${d.modes.join(' to ')}.`)
-    } catch {
-      say('Sorry, the audio could not be rendered.')
-    } finally {
-      exporting.value = ''
-    }
-  }
-
-  // Several seeds of this journey in one zip: the same stops, key, tempo, length and sound, a
-  // different seed in each, so the files fit together in a DAW (the modes change at the same
-  // moments in all of them) without repeating each other's notes. The seeds run on from this
-  // drift's own, so the first file is what was just heard.
-  async function exportVariations(count: number, format: 'mid' | 'wav') {
-    if (!lastDrift || exporting.value || (format === 'wav' && audioActive.value)) return
-    const d = lastDrift
-    const voice = VOICES[d.voiceId]
-    const files: ZipFile[] = []
-    const tempo = { bpm: d.bpm, grid: d.grid, density: d.density }
-    exporting.value = format === 'wav' ? 'loading…' : 'saving…'
-    say(format === 'wav' ? `Rendering ${count} variations. This can take a while.` : `Making ${count} variations.`)
-    try {
-      for (let k = 0; k < count; k++) {
-        const seed = (d.seed + k) % 2 ** 31
-        const of = `${k + 1}/${count}`
-        let bytes: Uint8Array
-        if (format === 'mid') {
-          exporting.value = `saving ${of}`
-          await new Promise((r) => setTimeout(r)) // let the label show
-          const score = scoreFor(voice, d.plan, seed, tempo)
-          bytes = await midiBytes(score, { voice: voice.label, seed, stops: d.stops, minutes: d.minutes, feel: d.grid && d.density ? `${GRID_LABEL[d.grid]} ${d.density}` : undefined })
-        } else {
-          bytes = await renderDriftWav(voice, d.plan, seed, tempo, (p) => {
-            exporting.value = p.stage === 'loading' ? 'loading…' : `rendering ${of} ${Math.round(p.done * 100)}%`
-          })
-        }
-        files.push({ name: exportName(d.head, d.modes, d.bpm, format, `${d.voiceId}-seed${seed}`), data: bytes })
+      const what = `${d.head ? d.head + ' ' : ''}${d.modes.join(' to ')}`
+      if (files.length === 1 && req.format !== 'clips') {
+        download(files[0].data, files[0].name, wav ? 'audio/wav' : 'audio/midi')
+        say(`${wav ? 'Audio' : 'MIDI'} file saved: ${what}.`)
+      } else {
+        const zipTag =
+          req.scope === 'seeds' ? `${d.voiceId}-${req.count}-seeds` : req.scope === 'sounds' ? `${units.length}-sounds` : `${d.voiceId}-clips`
+        download(zipStored(files), exportName(d.head, d.modes, d.bpm, 'zip', req.format === 'clips' && req.scope !== 'this' ? `${zipTag}-clips` : zipTag), 'application/zip')
+        say(`${ext === 'zip' && req.scope === 'this' ? `${files.length - 1} clips` : `${units.length} ${units.length > 1 ? 'files' : 'file'}`} saved: ${what}.` + (without ? ` ${without} had nothing to cut.` : ''))
       }
-      const name = exportName(d.head, d.modes, d.bpm, 'zip', `${d.voiceId}-${count}-seeds`)
-      download(zipStored(files), name, 'application/zip')
-      say(`${count} variations saved: ${d.head ? d.head + ' ' : ''}${d.modes.join(' to ')}.`)
     } catch {
-      say('Sorry, the variations could not be made.')
+      say('Sorry, that could not be made.')
     } finally {
       exporting.value = ''
     }
@@ -733,21 +707,28 @@
       @clear="clear"
       @preview="preview = $event" />
 
-    <p class="hint" :class="{ journey: !!info }" :style="vars(topInk)" aria-hidden="true">
-      {{ hint }}
-      <template v-if="info">
-        <template v-if="info.uniform">{{ info.key }} ·</template>
-        <template v-for="(st, i) in info.stages" :key="i">
-          <span class="mode" :class="{ on: i === activeStage }">{{ st.label }}</span>
-          <template v-if="i < info.stages.length - 1"> → </template>
+    <div class="hint" :class="{ journey: !!info }" :style="vars(topInk)">
+      <p class="line" aria-hidden="true">
+        {{ hint }}
+        <template v-if="info">
+          <template v-if="info.uniform">{{ info.key }} ·</template>
+          <template v-for="(st, i) in info.stages" :key="i">
+            <span class="mode" :class="{ on: i === activeStage }">{{ st.label }}</span>
+            <template v-if="i < info.stages.length - 1"> → </template>
+          </template>
+          <template v-if="info.bars"> · {{ info.bars }} bars</template>
+          <template v-if="info.bpm"> · {{ info.bpm }} BPM</template>
+          <template v-if="info.eased"> · {{ isPulse ? 'pattern' : 'chords' }} eased to fit</template>
         </template>
-        <template v-if="info.bars"> · {{ info.bars }} bars</template>
-        <template v-if="info.bpm"> · {{ info.bpm }} BPM</template>
-        <template v-if="info.eased"> · {{ isPulse ? 'pattern' : 'chords' }} eased to fit</template>
-        <span class="seed">{{ info.seed }}{{ kept ? ' · kept' : '' }}</span>
-        <span class="seed passing">{{ passing }}</span>
+      </p>
+      <template v-if="info">
+        <!-- the seed is also the way to keep it: press to reuse it (and the key) for the next Begin, on any sound -->
+        <button class="seed keep" type="button" :aria-pressed="!!kept" title="Keep this seed, and its key, for the next Begin" @click="keepSeed">
+          {{ info.seed }}{{ kept ? ' · kept' : '' }}
+        </button>
+        <span class="seed passing" aria-hidden="true">{{ passing }}</span>
       </template>
-    </p>
+    </div>
 
     <div :style="vars(bottomInk)">
       <button
@@ -789,14 +770,10 @@
         :has-journey="!!info"
         :playing="audioActive"
         :busy="exporting"
-        :can-clips="canClips"
-        :keeping="!!kept"
-        @keep="keepSeed"
-        @midi="exportMidi"
-        @wav="exportWav"
+        :bars-on="barsOn"
+        :drift-voice="driftVoice"
+        @export="exportAs"
         @save="saveProject"
-        @variations="exportVariations"
-        @clips="exportClips"
         @open="openProject" />
     </div>
 
@@ -933,11 +910,43 @@
   .field-app .hint .seed.passing {
     margin-top: 0;
   }
+  .field-app .hint .line {
+    margin: 0;
+  }
   .field-app .hint .seed {
     display: block;
     margin-top: 2px;
     font-size: 0.7rem;
     letter-spacing: 0.08em;
+  }
+  /* the seed is a button, with a 44px target that overlaps the lines above and below it (the readout
+     takes no more room); only the seed itself takes the pointer */
+  .field-app .hint .seed.keep {
+    all: unset;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    margin: -15px auto -15px;
+    padding: 0 14px;
+    width: fit-content;
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    color: var(--ink);
+    pointer-events: auto;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .field-app .hint .seed.keep:hover,
+  .field-app .hint .seed.keep[aria-pressed='true'] {
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+  }
+  .field-app .hint .seed.keep:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: -4px;
+    border-radius: 8px;
   }
 
   .field-app .sr-only {

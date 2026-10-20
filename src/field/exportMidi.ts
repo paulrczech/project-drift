@@ -5,6 +5,17 @@
 import { clipsOf, type Score } from '../engine/score'
 import type { ZipFile } from './zip'
 
+// What the file menu asks for: what to make, and how much of it (this drift; several seeds of it; the
+// same drift on several sounds).
+export type ExportFormat = 'mid' | 'clips' | 'wav'
+export type ExportScope = 'this' | 'seeds' | 'sounds'
+export interface ExportRequest {
+  format: ExportFormat
+  scope: ExportScope
+  count: number // seeds
+  sounds: string[] // voice ids
+}
+
 export interface Provenance {
   voice: string
   seed: number
