@@ -6,21 +6,19 @@
   import WordsFallback from './WordsFallback.vue'
   import SoundPicker from './SoundPicker.vue'
   import ExportPicker from './ExportPicker.vue'
-  import { NOTE_NAMES, scoreFor } from '../engine/score'
+  import { scoreFor } from '../engine/score'
   import { clipFiles, download, exportName, midiBytes, type ExportRequest } from './exportMidi'
   import { zipStored, type ZipFile } from './zip'
   import { renderDriftWav } from '../engine/render'
-  import { LENGTHS } from './lengths'
-  import { parseProject, toProject } from './project'
-  import { createJourney, MAX_POINTS, settingsOf } from './journey'
+  import { createJourney, MAX_POINTS } from './journey'
   import { useSoundOps } from './soundOps'
   import { useStopOps } from './stopOps'
   import { useDriftOps } from './driftOps'
-  import { loadPlayer, warmUp } from './warmUp'
+  import { useProjectOps } from './projectOps'
+  import { loadPlayer } from './warmUp'
   import { paletteAt, palettePath, inkFor } from './moodPlane'
-  import { DEFAULT_BARS, DEFAULT_VARIATION } from '../engine/compose'
-  import { GRID_LABEL } from '../engine/pulse'
-  import { VOICES, preloadVoice } from '../engine/voices'
+    import { GRID_LABEL } from '../engine/pulse'
+  import { VOICES } from '../engine/voices'
 
   const GenerativePlayer = defineAsyncComponent(loadPlayer)
 
@@ -28,69 +26,18 @@
   const {
     announcement, say, points, preview, minutes, voiceId, tempoFeel, customBpm, effectiveBpm, gridChoice, densityChoice,
     variationChoice, barsChoice, rootChoice, isPulse, drifting, position, plan, seed, audioActive,
-    session, driftBpm, driftGrid, driftDensity, driftVoice, info, exporting, kept, lastDrift, seedOverride, reset,
+    session, driftBpm, driftGrid, driftDensity, driftVoice, info, exporting, kept, lastDrift,
     barsOn, stopKeys, stopGrids, stopDensities, stopVariations, stopBars, activeStage, passing, progress,
   } = j
   const fieldRef = ref<{ focus: () => void } | null>(null)
   const playerRef = ref<{ stopDrift: () => void } | null>(null)
   const sound = useSoundOps(j)
+  const { saveProject, openProject } = useProjectOps(j)
   const { begin, onProgress, stop, onEnded, keepSeed } = useDriftOps(j, { stopPlayer: () => playerRef.value?.stopDrift() })
   const { chooseVoice, chooseTempo, chooseBpm, chooseGrid, chooseDensity, chooseVariation, chooseBars, chooseRoot } = sound
   const { choose, remove, clear, setFromWords, setStopKey, setStopGrid, setStopDensity, setStopVariation, setStopBars } = useStopOps(j, sound, {
     focusField: () => fieldRef.value?.focus(),
   })
-
-  function saveProject() {
-    if (!lastDrift.value) return
-    const d = lastDrift.value
-    const project = toProject({
-      points: d.points,
-      words: d.words,
-      minutes: d.minutes,
-      root: d.plan.tonic ?? 0,
-      voice: d.voiceId,
-      bpm: d.bpm,
-      grid: d.grid,
-      density: d.density,
-      variation: d.plan.waypoints[0]?.variation ?? DEFAULT_VARIATION,
-      bars: d.plan.waypoints[0]?.bars ?? DEFAULT_BARS,
-      seed: d.seed,
-      modes: d.modes,
-    })
-    const name = exportName(d.head, d.modes, d.bpm, 'drift.json')
-    download(new TextEncoder().encode(JSON.stringify(project, null, 2) + '\n'), name, 'application/json')
-    say(`Project saved: ${d.key} ${d.modes.join(' to ')}.`)
-  }
-
-  // Opening a project sets up the journey as it was (its seed is used by the next Begin). The
-  // sound, tempo and key are the project's for this visit only: they do not replace the listener's
-  // remembered choices.
-  function openProject(text: string) {
-    if (drifting.value || audioActive.value) return
-    const r = parseProject(text, { lengths: LENGTHS, maxStops: MAX_POINTS })
-    if (!r.ok) {
-      say(r.reason)
-      return
-    }
-    const p = r.project
-    reset()
-    points.value = p.stops.map((s) => ({ v: s.v, a: s.a, ...settingsOf(s) }))
-    minutes.value = p.minutes
-    rootChoice.value = p.root
-    if (VOICES[p.voice]) {
-      voiceId.value = p.voice
-      preloadVoice(VOICES[p.voice])
-    }
-    customBpm.value = p.bpm === null ? null : p.bpm
-    if (p.grid) gridChoice.value = p.grid
-    if (p.density) densityChoice.value = p.density
-    variationChoice.value = p.variation
-    barsChoice.value = p.bars
-    warmUp()
-    seedOverride.value = p.seed
-    kept.value = null
-    say(`Project opened: ${p.stops.length === 1 ? '1 stop' : `${p.stops.length} stops`}, ${NOTE_NAMES[p.root]}. Press begin.`)
-  }
 
   // Taking the journey away (file menu): what to make (MIDI; clips for a DAW's clip view; the audio as
   // WAV) and how much of it — this drift, several seeds of it (the same stops, key, tempo and sound, the
